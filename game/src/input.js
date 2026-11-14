@@ -1,25 +1,30 @@
-// Keyboard and mouse, and the pointer lock that turns the mouse into look. Plain browser
-// APIs only: the game asks the canvas for pointer lock and reads movementX/Y while it holds it.
+// Keyboard/mouse input with pointer lock and one-shot key presses.
 export function createInput(canvas, onLockChange) {
   const keys = new Set();
-  const state = { keys, locked: false, firing: false, lookX: 0, lookY: 0 };
+  const pressed = new Set();
+  const state = { keys, locked: false, firing: false, lookX: 0, lookY: 0, pressedThisFrame: false };
 
-  function setKey(event, down) {
-    if (down) keys.add(event.code);
-    else keys.delete(event.code);
-    if (event.code === 'Space') event.preventDefault();
-  }
-
-  window.addEventListener('keydown', (event) => setKey(event, true));
-  window.addEventListener('keyup', (event) => setKey(event, false));
-  window.addEventListener('blur', () => keys.clear());
+  window.addEventListener('keydown', (event) => {
+    if (event.code === 'Tab' || event.code === 'Space') event.preventDefault();
+    if (!event.repeat) pressed.add(event.code);
+    keys.add(event.code);
+  });
+  window.addEventListener('keyup', (event) => {
+    keys.delete(event.code);
+  });
+  window.addEventListener('blur', () => {
+    keys.clear();
+    state.firing = false;
+  });
   window.addEventListener('mousemove', (event) => {
     if (!state.locked) return;
     state.lookX += event.movementX;
     state.lookY += event.movementY;
   });
   window.addEventListener('mousedown', (event) => {
-    if (state.locked && event.button === 0) state.firing = true;
+    if (event.button !== 0) return;
+    pressed.add('Mouse0');
+    state.firing = true;
   });
   window.addEventListener('mouseup', (event) => {
     if (event.button === 0) state.firing = false;
@@ -36,7 +41,10 @@ export function createInput(canvas, onLockChange) {
   return {
     state,
     requestLock() {
-      canvas.requestPointerLock();
+      if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
+    },
+    exitLock() {
+      if (document.pointerLockElement === canvas) document.exitPointerLock();
     },
     takeLook() {
       const x = state.lookX;
@@ -44,6 +52,14 @@ export function createInput(canvas, onLockChange) {
       state.lookX = 0;
       state.lookY = 0;
       return { x, y };
+    },
+    consume(code) {
+      if (!pressed.has(code)) return false;
+      pressed.delete(code);
+      return true;
+    },
+    clearPressed() {
+      pressed.clear();
     },
   };
 }

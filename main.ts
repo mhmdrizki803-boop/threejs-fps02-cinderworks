@@ -1,10 +1,7 @@
-// A working threejs-fps-01 entry (Node 22, standard library only): the game is this directory's
-// game/ folder, plain static files the browser loads as ES modules with three.js from an import
-// map, and the program hands it in. It copies game/ and screenshots/ from beside this file to
-// /output and writes /output/dossier.json, the summary the judge reads, with the vendored make.fun
-// library. A starting point, not a winner: a grey room, one rifle and four targets that drop when
-// shot. Build your game, put your PNG or JPEG screenshots in screenshots/ (the first by name is
-// the cover) and run it.
+// CINDERWORKS: a round-based tactical FPS built on three.js. game/ holds the whole game as plain
+// static files loaded through an import map; this entry copies game/ and screenshots/ beside this
+// file to /output and writes /output/dossier.json with the vendored make.fun library. The first
+// screenshot by name is the cover.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
