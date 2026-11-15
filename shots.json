@@ -1,5 +1,6 @@
 [
   { "name": "1-firefight.jpg", "query": "?shot=play&seed=3" },
-  { "name": "2-buy-phase.jpg", "query": "?shot=start&seed=3" },
-  { "name": "3-match-end.jpg", "query": "?shot=end&seed=3" }
+  { "name": "2-menu.jpg", "query": "?shot=menu&seed=3" },
+  { "name": "3-buy-phase.jpg", "query": "?shot=start&seed=3" },
+  { "name": "4-plant.jpg", "query": "?shot=play&seed=7" }
 ]
