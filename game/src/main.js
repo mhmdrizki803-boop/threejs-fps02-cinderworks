@@ -83,6 +83,7 @@ let activeGun = pistol;
 let started = false;
 let accumulator = 0;
 let lastTime = performance.now();
+const stats = { frames: 0, since: lastTime };
 let footMoved = 0;
 let bombBeep = 0;
 let shake = 0;
@@ -819,6 +820,25 @@ camera.aspect = window.innerWidth / window.innerHeight;
 camera.updateProjectionMatrix();
 renderer.setSize(window.innerWidth, window.innerHeight);
 });
+// Adaptive resolution: a weak GPU may not hold 60 fps at full size, so the
+// picture scales down instead of the round clock falling behind. Screenshots
+// run at full quality and never touch this.
+const quality = { scale: 1, cooldown: 0 };
+function adaptQuality(dt) {
+if (shotMode) return;
+quality.cooldown -= dt;
+const fps = window.__fps ?? 60;
+if (quality.cooldown <= 0 && fps < 24 && quality.scale > 0.5) {
+quality.scale = Math.max(0.5, quality.scale - 0.125);
+quality.cooldown = 2;
+} else if (quality.cooldown <= 0 && fps > 55 && quality.scale < 1) {
+quality.scale = Math.min(1, quality.scale + 0.125);
+quality.cooldown = 4;
+}
+const ratio = Math.min(window.devicePixelRatio, 2) * quality.scale;
+if (Math.abs(renderer.getPixelRatio() - ratio) > 1e-3) renderer.setPixelRatio(ratio);
+}
+window.__quality = quality;
 function bootMenuScene() {
 match.state.phase = 'menu';
 match.state.scores.ember = 0;
@@ -1133,13 +1153,24 @@ return;
 const look = input.takeLook();
 if (input.state.locked) player.look(look.x, look.y);
 accumulator += dt;
+// Catch up to the clamped frame time: 0.1 s is six fixed steps, so a slow
+// renderer slows the picture, not the round clock or the bots.
+const maxSteps = Math.ceil(0.1 / FIXED_STEP);
 let steps = 0;
-while (accumulator >= FIXED_STEP && steps < 5) {
+while (accumulator >= FIXED_STEP && steps < maxSteps) {
 simulationStep(FIXED_STEP);
 accumulator -= FIXED_STEP;
 steps += 1;
 }
-if (accumulator > FIXED_STEP * 5) accumulator = 0;
+if (accumulator > FIXED_STEP * maxSteps) accumulator = 0;
+stats.frames += 1;
+if (now - stats.since >= 1000) {
+window.__fps = stats.frames * 1000 / (now - stats.since);
+stats.frames = 0;
+stats.since = now;
+}
+window.__clock = { accumulator, steps };
+adaptQuality(dt);
 tickHud(dt);
 syncCamera();
 const alpha = Math.min(1, accumulator / FIXED_STEP);

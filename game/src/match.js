@@ -76,7 +76,7 @@ state.bomb.timer = BOMB_TIME;
 state.bomb.plantProgress = 0;
 state.bomb.defuseProgress = 0;
 state.bomb.defuser = null;
-setBanner(`ROUND ${state.round}`, state.sideOf(state.playerTeam) === 'attack' ? 'EMBER ATTACKS' : 'EMBER DEFENDS', 2.6);
+setBanner(`ROUND ${state.round}`, `${state.playerTeam.toUpperCase()} ${state.sideOf(state.playerTeam) === 'attack' ? 'ATTACKS' : 'DEFENDS'}`, 2.6);
 ctx.onRoundStart();
 }
 function finishRound(winner, reason, ctx) {

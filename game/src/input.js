@@ -2,6 +2,13 @@ export function createInput(canvas, onLockChange) {
 const keys = new Set();
 const pressed = new Set();
 const state = { keys, locked: false, firing: false, lookX: 0, lookY: 0, pressedThisFrame: false };
+function clearInput() {
+keys.clear();
+pressed.clear();
+state.firing = false;
+state.lookX = 0;
+state.lookY = 0;
+}
 window.addEventListener('keydown', (event) => {
 if (event.code === 'Tab' || event.code === 'Space') event.preventDefault();
 if (!event.repeat) pressed.add(event.code);
@@ -10,10 +17,7 @@ keys.add(event.code);
 window.addEventListener('keyup', (event) => {
 keys.delete(event.code);
 });
-window.addEventListener('blur', () => {
-keys.clear();
-state.firing = false;
-});
+window.addEventListener('blur', clearInput);
 window.addEventListener('mousemove', (event) => {
 if (!state.locked) return;
 state.lookX += event.movementX;
@@ -30,8 +34,7 @@ if (event.button === 0) state.firing = false;
 document.addEventListener('pointerlockchange', () => {
 state.locked = document.pointerLockElement === canvas;
 if (!state.locked) {
-keys.clear();
-state.firing = false;
+clearInput();
 }
 onLockChange(state.locked);
 });
