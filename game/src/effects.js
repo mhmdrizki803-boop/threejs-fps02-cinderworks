@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { PALETTE } from './palette.js';
 const tempA = new THREE.Vector3();
-const tempB = new THREE.Vector3();
 const tempDir = new THREE.Vector3();
 const zAxis = new THREE.Vector3(0, 0, 1);
 export function createEffects(scene) {

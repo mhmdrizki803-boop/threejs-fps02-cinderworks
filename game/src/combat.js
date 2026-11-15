@@ -1,6 +1,4 @@
 import * as THREE from 'three';
-const rayOrigin = new THREE.Vector3();
-const rayDir = new THREE.Vector3();
 const point = new THREE.Vector3();
 const result = {
 kind: 'none', entity: null, part: 'body', point: new THREE.Vector3(), distance: 0, normal: new THREE.Vector3(), wall: false,
@@ -108,7 +106,4 @@ if (length < 0.0001) out.set(0, 0, -1);
 else out.multiplyScalar(1 / length);
 return out;
 }
-export function barTile(map, from, to) {
-return map.lineOfSight(from.x, from.z, to.x, to.z);
-}
-export { rayOrigin, rayDir, point };
+export { point };

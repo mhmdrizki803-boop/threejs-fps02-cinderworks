@@ -48,8 +48,6 @@ cooldown: 0,
 reloadLeft: 0,
 shotIndex: 0,
 bloom: 0,
-triggerHeld: false,
-shotsSinceStep: 0,
 };
 return gun;
 }

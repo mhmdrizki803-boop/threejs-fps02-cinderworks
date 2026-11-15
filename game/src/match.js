@@ -91,7 +91,7 @@ state.playerMoney = Math.min(MAX_MONEY, state.playerMoney + (state.playerTeam ==
 for (const bot of ctx.bots) {
 bot.money = Math.min(MAX_MONEY, bot.money + (bot.team === winner ? winBonus : lossBonus));
 }
-state.phase = state.scores[winner] >= WIN_ROUNDS ? 'roundEnd' : 'roundEnd';
+state.phase = 'roundEnd';
 state.phaseTimer = 5.0;
 state.roundWinner = winner;
 if (state.scores[winner] >= WIN_ROUNDS) state.matchWinner = winner;

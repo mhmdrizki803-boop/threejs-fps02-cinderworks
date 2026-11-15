@@ -1,22 +1,19 @@
 export function createInput(canvas, onLockChange) {
 const keys = new Set();
 const pressed = new Set();
-const state = { keys, locked: false, firing: false, lookX: 0, lookY: 0, pressedThisFrame: false };
+const state = { keys, locked: false, firing: false, lookX: 0, lookY: 0 };
 function clearInput() {
 keys.clear();
 pressed.clear();
 state.firing = false;
-state.lookX = 0;
-state.lookY = 0;
+state.lookX = state.lookY = 0;
 }
 window.addEventListener('keydown', (event) => {
 if (event.code === 'Tab' || event.code === 'Space') event.preventDefault();
 if (!event.repeat) pressed.add(event.code);
 keys.add(event.code);
 });
-window.addEventListener('keyup', (event) => {
-keys.delete(event.code);
-});
+window.addEventListener('keyup', (event) => keys.delete(event.code));
 window.addEventListener('blur', clearInput);
 window.addEventListener('mousemove', (event) => {
 if (!state.locked) return;
@@ -33,9 +30,7 @@ if (event.button === 0) state.firing = false;
 });
 document.addEventListener('pointerlockchange', () => {
 state.locked = document.pointerLockElement === canvas;
-if (!state.locked) {
-clearInput();
-}
+if (!state.locked) clearInput();
 onLockChange(state.locked);
 });
 return {
@@ -47,10 +42,8 @@ exitLock() {
 if (document.pointerLockElement === canvas) document.exitPointerLock();
 },
 takeLook() {
-const x = state.lookX;
-const y = state.lookY;
-state.lookX = 0;
-state.lookY = 0;
+const x = state.lookX, y = state.lookY;
+state.lookX = state.lookY = 0;
 return { x, y };
 },
 consume(code) {

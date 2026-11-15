@@ -166,14 +166,12 @@ lastPhase = phase;
 els.phase.textContent = phase;
 }
 els.roundNum.textContent = `ROUND ${state.round}`;
-const score = `${state.scores.ember} : ${state.scores.warden}`;
 if (els.scoreEmber.textContent !== String(state.scores.ember)) els.scoreEmber.textContent = String(state.scores.ember);
 if (els.scoreWarden.textContent !== String(state.scores.warden)) els.scoreWarden.textContent = String(state.scores.warden);
 els.bomb.hidden = !planted;
 if (planted) {
 els.bombTimer.textContent = clock(state.bomb.timer);
 els.bomb.hidden = false;
-els.bomb.dataset.score = score;
 }
 els.buyTimer.textContent = clock(state.buyTimer);
 }

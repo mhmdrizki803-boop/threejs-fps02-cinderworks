@@ -820,9 +820,8 @@ camera.aspect = window.innerWidth / window.innerHeight;
 camera.updateProjectionMatrix();
 renderer.setSize(window.innerWidth, window.innerHeight);
 });
-// Adaptive resolution: a weak GPU may not hold 60 fps at full size, so the
-// picture scales down instead of the round clock falling behind. Screenshots
-// run at full quality and never touch this.
+// Adaptive resolution: a weak GPU scales the picture down, never the round clock.
+// Screenshots run at full quality and never touch this.
 const quality = { scale: 1, cooldown: 0 };
 function adaptQuality(dt) {
 if (shotMode) return;
@@ -1153,8 +1152,7 @@ return;
 const look = input.takeLook();
 if (input.state.locked) player.look(look.x, look.y);
 accumulator += dt;
-// Catch up to the clamped frame time: 0.1 s is six fixed steps, so a slow
-// renderer slows the picture, not the round clock or the bots.
+// Catch up to the clamped frame time: a slow renderer slows the picture, not the clock.
 const maxSteps = Math.ceil(0.1 / FIXED_STEP);
 let steps = 0;
 while (accumulator >= FIXED_STEP && steps < maxSteps) {
