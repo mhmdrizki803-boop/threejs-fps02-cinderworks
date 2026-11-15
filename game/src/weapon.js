@@ -113,10 +113,10 @@ const body = '#242d33';
 const accent = PALETTE.accent;
 const glove = '#5c4a39';
 const hand = boxMesh(0.075, 0.075, 0.14, glove, 0.05, 0.9);
-hand.position.set(0.045, -0.055, 0.16);
+hand.position.set(0.025, -0.1, 0.02);
 group.add(hand);
 const hand2 = hand.clone();
-hand2.position.set(-0.035, -0.07, -0.13);
+hand2.position.set(-0.025, -0.045, id === 'kestrel' ? -0.12 : -0.44);
 group.add(hand2);
 if (id === 'kestrel') {
 const slide = boxMesh(0.055, 0.075, 0.3, body, 0.5, 0.35);
@@ -185,13 +185,13 @@ export function createViewModel(camera) {
 const models = {};
 for (const id of Object.keys(WEAPONS)) {
 const model = buildModel(id);
-model.scale.setScalar(0.6);
+model.scale.setScalar(0.48);
 model.visible = false;
 camera.add(model);
 models[id] = model;
 }
 const flash = new THREE.Mesh(
-new THREE.PlaneGeometry(0.22, 0.22),
+new THREE.OctahedronGeometry(0.055, 0),
 new THREE.MeshBasicMaterial({ color: new THREE.Color(PALETTE.hazard), transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }),
 );
 flash.visible = false;
@@ -224,14 +224,15 @@ const bobY = Math.abs(Math.sin(state.bob)) * 0.011 * state.sway;
 const targetY = base.y + bobY - (state.lowered ? 0.3 : 0);
 model.position.set(base.x + bobX, targetY, base.z + state.kick * 0.06);
 model.rotation.x = -0.05 + state.kick * 1.4 - state.reloadAnim * 0.7;
-model.rotation.z = state.reloadAnim * 0.35;
-model.rotation.y = 0.08 - state.reloadAnim * 0.3;
-flash.visible = state.flash > 0;
+model.rotation.z = -0.12 + state.reloadAnim * 0.35;
+model.rotation.y = 0.18 - state.reloadAnim * 0.3;
+flash.visible = state.flash > 0 && !state.hidden;
 if (state.flash > 0) {
-flash.position.set(base.x + bobX - 0.01, targetY + 0.07, base.z - 0.46);
+model.updateMatrix();
+flash.position.set(0, 0.04, { kestrel: -0.32, rattler: -0.56, longbow: -0.86, talon: -1.02 }[state.active]).applyMatrix4(model.matrix);
 flash.rotation.z = state.flash * 47;
 const scale = 1 + state.flash * 2.6;
-flash.scale.set(scale, scale, scale);
+flash.scale.set(scale * 0.5, scale * 0.5, scale * 1.6);
 flash.material.opacity = Math.min(1, state.flash * 8);
 flashLight.intensity = 12 * Math.min(1, state.flash * 14);
 flashLight.position.copy(flash.position);

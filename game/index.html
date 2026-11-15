@@ -1,4 +1,16 @@
 <!doctype html>
+<!--
+main.js composes the scene and runs simulationStep at a fixed 60 Hz.
+The frame accumulator bounds catch-up to five ticks per render.
+Rendering interpolates player camera and bot positions between ticks.
+match.js owns round, economy and bomb state; player.js owns player state.
+bots.js owns bot state, perception, combat and waypoint following.
+map.js owns geometry, site definitions, collision and navigation grids.
+weapon.js owns gun state and view models; combat.js resolves hits.
+physics.js resolves movement; input.js collects controls.
+effects.js and audio.js present feedback; hud.js updates DOM and radar.
+main.js owns loadout and grenade state and connects these module owners.
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -217,7 +229,7 @@ td .chip { display: inline-block; width: 7px; height: 7px; border-radius: 50%; m
 </div>
 <div id="bombstatus" hidden><span class="dot"></span><span>PULSE CORE ARMED</span><span id="bomb-timer">0:40</span></div>
 <div id="killfeed"></div>
-<div id="banner"><div class="kick" id="banner-kick">FOUNDRY // SITE A</div><div id="banner-title"></div><div id="banner-sub"></div></div>
+<div id="banner"><div class="kick" id="banner-kick">FOUNDRY // A + B</div><div id="banner-title"></div><div id="banner-sub"></div></div>
 <div id="crosshair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="dot"></i></div>
 <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
 <div id="dmg"><i></i></div>
@@ -229,7 +241,7 @@ td .chip { display: inline-block; width: 7px; height: 7px; border-radius: 50%; m
 <div class="barrow"><span class="vlabel">HP</span><div class="bar" id="hp-bar"><b id="hp-fill"></b></div><span class="vnum" id="hp-num">100</span></div>
 <div class="barrow"><span class="vlabel">AR</span><div class="bar armor" id="ar-bar"><b id="ar-fill"></b></div><span class="vnum" id="ar-num">0</span></div>
 </div>
-<div id="radar-wrap"><canvas id="radar" width="148" height="148"></canvas><div class="radar-cap">FOUNDRY // A</div></div>
+<div id="radar-wrap"><canvas id="radar" width="148" height="148"></canvas><div class="radar-cap">FOUNDRY // A + B</div></div>
 <div id="money"><span class="cur">$</span><span id="money-num">800</span></div>
 <div id="ammo"><div id="wpn-name">KESTREL-9</div><div class="nums"><span id="ammo-mag">15</span><span id="ammo-reserve">/ 60</span></div></div>
 <div id="grenades">
@@ -261,10 +273,10 @@ td .chip { display: inline-block; width: 7px; height: 7px; border-radius: 50%; m
 </div>
 <div id="overlay">
 <div class="menu">
-<div class="eyebrow">FOUNDRY // SITE A // 5V5</div>
+<div class="eyebrow">FOUNDRY // TWO SITES // 5V5</div>
 <h1>CINDER<br>WORKS</h1>
 <div class="tag">ROUND-BASED TACTICAL FPS</div>
-<p class="brief">One pulse core, two crews, thirteen rounds. Ember attacks the foundry, Warden holds the pad. <b>Stop to aim</b>, buy between rounds, and break sightlines with smoke.</p>
+<p class="brief">Two sites, two crews, thirteen rounds. Push <b>Pulse Core A</b> or <b>Coolant Loop B</b>. Stop to aim, buy between rounds, and break sightlines with smoke.</p>
 <div class="actions">
 <button id="attack" type="button">ATTACK</button>
 <button id="defend" type="button">DEFEND</button>

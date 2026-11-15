@@ -55,6 +55,8 @@ const hud = createHud(map);
 const input = createInput(renderer.domElement, onLockChange);
 const view = createViewModel(camera);
 const combatants = [player.state, ...bots.roster];
+const previousPositions = combatants.map(entity => entity.position.clone());
+let previousEye = player.state.eye;
 const heldGrenades = {};
 for (const [type, def] of Object.entries(GRENADE_DEFS)) {
 const group = new THREE.Group();
@@ -251,6 +253,7 @@ let suppressElimination = false;
 function checkElimination() {
 const state = match.state;
 if (state.phase !== 'live' || suppressElimination) return;
+if (state.bomb.state === 'planted' && aliveCount(otherTeam(state.attackerTeam)) > 0) return;
 if (aliveCount('ember') === 0) match.finishRound('warden', 'EMBER ELIMINATED', matchCtx);
 else if (aliveCount('warden') === 0) match.finishRound('ember', 'WARDEN ELIMINATED', matchCtx);
 }
@@ -362,7 +365,8 @@ hud.setInteract(false, 0, '');
 return;
 }
 const playerIsAttacker = state.sideOf(player.state.team) === 'attack';
-const playerInSite = Math.hypot(player.state.position.x - map.site.x, player.state.position.z - map.site.z) < map.site.radius;
+const playerSite = map.siteAt(player.state.position.x, player.state.position.z);
+const playerInSite = Boolean(playerSite);
 const playerNearBomb = Math.hypot(player.state.position.x - bomb.position.x, player.state.position.z - bomb.position.z) < 2.1;
 if (bomb.state === 'carried') {
 const carrier = bomb.carrier;
@@ -377,7 +381,7 @@ const holding = input.state.keys.has('KeyE');
 if (inSite && holding) {
 bomb.plantProgress = Math.min(1, bomb.plantProgress + dt / 3.2);
 if (bomb.plantProgress >= 1) {
-match.plant(player.state, player.state.position.x, player.state.position.z);
+match.plant(player.state, player.state.position.x, player.state.position.z, playerSite.id);
 effects.impact(new THREE.Vector3(player.state.position.x, 0.2, player.state.position.z), new THREE.Vector3(0, 1, 0));
 if (!shotMode) audio.plant();
 bombBeep = 0;
@@ -386,13 +390,13 @@ hud.setBanner(match.state.banner);
 } else {
 bomb.plantProgress = Math.max(0, bomb.plantProgress - dt * 1.4);
 }
-hud.setInteract(inSite, bomb.plantProgress, 'HOLD E — PLANT PULSE CORE');
+hud.setInteract(inSite, bomb.plantProgress, `HOLD E — PLANT AT ${playerSite?.label ?? ''}`);
 } else {
-const inSite = Math.hypot(carrier.position.x - map.site.x, carrier.position.z - map.site.z) < map.site.radius;
+const inSite = map.siteAt(carrier.position.x, carrier.position.z);
 if (inSite && carrier.interacting === 'plant') {
 bomb.plantProgress = Math.min(1, bomb.plantProgress + dt / 3.2);
 if (bomb.plantProgress >= 1) {
-match.plant(carrier, carrier.position.x, carrier.position.z);
+match.plant(carrier, carrier.position.x, carrier.position.z, inSite.id);
 if (!shotMode) audio.plant();
 bombBeep = 0;
 }
@@ -409,7 +413,7 @@ rate = 1 / (loadout.kit ? 5 : 10);
 defuser = player.state;
 }
 for (const bot of bots.roster) {
-if (!bot.alive || bot.team === state.attackerTeam || bot.interacting !== 'defuse') continue;
+if (!bot.alive || bot.team === state.attackerTeam || bot.interacting !== 'defuse' || Math.hypot(bot.position.x - bomb.position.x, bot.position.z - bomb.position.z) >= 1.7) continue;
 const botRate = 1 / (bot.hasKit ? 5 : 10);
 if (botRate > rate) {
 rate = botRate;
@@ -567,7 +571,9 @@ loadout.primary.shotIndex = 0;
 }
 equipGun();
 view.state.lowered = false;
-bots.resetRound(state.attackerTeam, player.state.team);
+state.attackSite = rng() < 0.5 ? 'A' : 'B';
+state.bomb.siteId = null;
+bots.resetRound(state.attackerTeam, player.state.team, state.attackSite);
 bots.buy(state.attackerTeam);
 bots.refreshGuns();
 if (side === 'attack') {
@@ -608,10 +614,11 @@ if (state.phase === 'buy') return 'BUY PHASE — PRESS <b>B</b> FOR THE ARMORY';
 if (state.phase === 'roundEnd' || state.phase === 'halftime' || state.phase === 'matchEnd') return '';
 if (!player.state.alive) return 'SPECTATING — <b>ROUND IN PROGRESS</b>';
 const defending = state.sideOf(player.state.team) === 'defend';
-if (state.bomb.state === 'planted') return defending ? 'DEFUSE THE <b>PULSE CORE</b>' : 'DEFEND THE <b>PULSE CORE</b>';
-if (defending) return 'DEFEND <b>SITE A</b>';
-if (state.bomb.carrier === player.state) return 'PLANT AT <b>PULSE SITE A</b> — HOLD <b>E</b>';
-return 'MOVE ON <b>SITE A</b>';
+if (hud.els.interact.classList.contains('on')) return '';
+if (state.bomb.state === 'planted') return `${defending ? 'RETAKE' : 'HOLD'} <b>SITE ${state.bomb.siteId}</b>`;
+if (defending) return 'DEFEND <b>A / B</b>';
+if (state.bomb.carrier === player.state) return 'CARRY CORE TO <b>A / B</b>';
+return `MOVE ON <b>SITE ${state.attackSite ?? 'A'}</b>`;
 }
 function tickHud(dt) {
 const state = match.state;
@@ -695,6 +702,8 @@ bots.hear(x, z, team, match.state.now);
 },
 };
 function simulationStep(dt) {
+combatants.forEach((entity, i) => previousPositions[i].copy(entity.position));
+previousEye = player.state.eye;
 const state = match.state;
 if (state.phase === 'menu') {
 player.step(dt, input.state.keys, false);
@@ -850,9 +859,6 @@ hud.setDeath(false);
 equipGun();
 view.update(0.016, activeGun);
 }
-function shotBuyData() {
-return buyData();
-}
 function setupShotStart() {
 const state = match.state;
 state.phase = 'buy';
@@ -900,13 +906,13 @@ effects.clear();
 hud.setMenu(false);
 hud.setBoardOpen(false);
 hud.setDeath(false);
-hud.setBuyOpen(true, shotBuyData());
+hud.setBuyOpen(true, buyData());
 hud.setVitals(100, 100, true);
 hud.setMoney(4300);
 hud.setFeed([]);
 syncGunHud();
 tickHud(0.016);
-hud.setBuyOpen(true, shotBuyData());
+hud.setBuyOpen(true, buyData());
 }
 function setupShotPlay() {
 if (seed === 7) {
@@ -933,7 +939,7 @@ state.feed = [
 { killer: 'SABLE', victim: 'COVE', weapon: 'LONGBOW', headshot: true, killerTeam: 'warden', self: false },
 { killer: 'YOU', victim: 'HARROW', weapon: 'LONGBOW', headshot: true, killerTeam: 'ember', self: true },
 ];
-player.state.position.set(1.8, 0, 6.5);
+player.state.position.set(-12, 0, 3);
 player.state.yaw = 0.03;
 player.state.pitch = -0.02;
 player.state.health = 74;
@@ -967,7 +973,10 @@ hud.setBanner(state.banner);
 hud.setObjective(objectiveText());
 hud.setCrosshair(0.012);
 hud.setInteract(false, 0, '');
-aimAngles(-3.2, 1.1, -3.2);
+const target = bots.roster[4];
+target.position.set(-12.8, 0, -6.4);
+bots.syncModels(botCtx);
+aimAngles(-12.8, 1.1, -6.4);
 shoot();
 effects.freeze();
 view.update(0.016, activeGun);
@@ -993,11 +1002,8 @@ state.bomb.carrier = player.state;
 state.bomb.timer = 40;
 state.bomb.plantProgress = 0.52;
 state.banner = { text: '', sub: '', time: 0 };
-state.feed = [
-{ killer: 'YOU', victim: 'SABLE', weapon: 'LONGBOW', headshot: true, killerTeam: 'ember', self: true },
-{ killer: 'PYRE', victim: 'MORROW', weapon: 'RATTLER', headshot: false, killerTeam: 'ember', self: false },
-];
-player.state.position.set(0.2, 0, -0.6);
+state.feed = [];
+player.state.position.set(12, 0, -3);
 player.state.yaw = 0.02;
 player.state.pitch = -0.36;
 player.state.health = 88;
@@ -1033,10 +1039,10 @@ hud.setFeed(state.feed);
 hud.setBanner(state.banner);
 hud.setObjective(objectiveText());
 hud.setCrosshair(0.006);
-hud.setInteract(true, 0.52, 'HOLD E — PLANT PULSE CORE');
+hud.setInteract(true, 0.52, 'HOLD E — PLANT AT COOLANT LOOP');
 view.update(0.016, activeGun);
 tickHud(0.016);
-hud.setInteract(true, 0.52, 'HOLD E — PLANT PULSE CORE');
+hud.setInteract(true, 0.52, 'HOLD E — PLANT AT COOLANT LOOP');
 }
 function playersShotBots() {
 bots.resetRound('ember', 'ember');
@@ -1070,85 +1076,15 @@ bot.money = 1800 + i * 420;
 bots.syncModels(botCtx);
 }
 function setupShotEnd() {
+setupShotPlay();
 const state = match.state;
 state.phase = 'matchEnd';
 state.round = 13;
 state.scores.ember = 7;
 state.scores.warden = 6;
 state.matchWinner = 'ember';
-state.attackerTeam = 'warden';
-state.playerTeam = 'ember';
-state.playerMoney = 5200;
-state.now = 640;
-state.bomb.state = 'planted';
-state.bomb.position.x = 0;
-state.bomb.position.z = -4;
-state.bomb.timer = 31;
 state.banner = { text: 'EMBER WINS THE MATCH', sub: '7 : 6 // FOUNDRY', time: 999 };
-state.feed = [
-{ killer: 'YOU', victim: 'SABLE', weapon: 'LONGBOW', headshot: true, killerTeam: 'ember', self: true },
-{ killer: 'PYRE', victim: 'VALE', weapon: 'RATTLER', headshot: false, killerTeam: 'ember', self: false },
-{ killer: 'YOU', victim: 'MORROW', weapon: 'LONGBOW', headshot: false, killerTeam: 'ember', self: true },
-{ killer: 'BRAND', victim: 'HARROW', weapon: 'LONGBOW', headshot: true, killerTeam: 'ember', self: false },
-];
-player.state.position.set(0, 0, 4.5);
-player.state.yaw = 0;
-player.state.pitch = 0.0;
-player.state.health = 100;
-player.state.armor = 0;
-player.state.helmet = false;
-player.state.alive = true;
-player.state.kills = 24;
-player.state.deaths = 9;
-loadout.primary = createGun('longbow');
-loadout.primaryId = 'longbow';
-loadout.slot = 'primary';
-equipGun();
-loadout.primary.mag = 12;
-view.state.lowered = false;
-bots.resetRound('warden', 'ember');
-const allies = [[-4.5, 2.0, 0.1], [4.4, 1.2, -0.1], [-2.4, -2.0, 0.0], [3.2, -4.0, 0.2]];
-for (let i = 0; i < 4; i += 1) {
-const bot = bots.roster[i];
-bot.position.set(allies[i][0], 0, allies[i][1]);
-bot.yaw = allies[i][2];
-bot.alive = i !== 2;
-bot.health = bot.alive ? 100 : 0;
-bot.kills = 6 + i * 2;
-bot.deaths = 3 + i;
-bot.money = 3100 + i * 400;
-bot.primaryId = 'longbow';
-bot.gun = createGun('longbow');
-}
-const enemies = [[-6.2, -5.0], [6.4, -5.4], [0.0, -9.0], [-8.0, 1.0], [8.2, 0.5]];
-for (let i = 0; i < 5; i += 1) {
-const bot = bots.roster[4 + i];
-bot.position.set(enemies[i][0], 0, enemies[i][1]);
-bot.yaw = 0;
-bot.alive = i > 2 ? false : i !== 0;
-bot.health = bot.alive ? 100 : 0;
-bot.deathTimer = 2.4;
-bot.kills = 4 + i;
-bot.deaths = 7 + i;
-bot.money = 1200 + i * 300;
-bot.gun = createGun(i === 4 ? 'talon' : 'longbow');
-}
-bots.syncModels(botCtx);
-hud.setMenu(false);
-hud.setDeath(false);
-hud.setBuyOpen(false);
-hud.setBoardOpen(true);
-hud.refreshBoard(rowsForBoard(), state);
-hud.setVitals(100, 0, true);
-hud.setMoney(5200);
-hud.setFeed(state.feed);
-hud.setBanner(state.banner);
-hud.setTimer(state);
-hud.setCrosshair(0.003);
-hud.setObjective('');
-syncGunHud();
 tickHud(0.016);
-hud.setBanner(state.banner);
 hud.setBoardOpen(true);
 hud.refreshBoard(rowsForBoard(), state);
 }
@@ -1170,6 +1106,7 @@ bootMenuScene();
 hud.setMenu(name === 'menu');
 if (name === 'start') setupShotStart();
 else if (name === 'play') setupShotPlay();
+else if (name === 'plant') setupShotPlant();
 else if (name === 'menu') hud.setMenu(true);
 else setupShotEnd();
 hud.setRadar(radarData, 0.2);
@@ -1205,6 +1142,12 @@ steps += 1;
 if (accumulator > FIXED_STEP * 5) accumulator = 0;
 tickHud(dt);
 syncCamera();
+const alpha = Math.min(1, accumulator / FIXED_STEP);
+camera.position.lerpVectors(previousPositions[0], player.state.position, alpha);
+camera.position.y += THREE.MathUtils.lerp(previousEye, player.state.eye, alpha);
+bots.roster.forEach((bot, i) => {
+if (bot.alive) bot.model.group.position.lerpVectors(previousPositions[i + 1], bot.position, alpha);
+});
 effects.setCameraQuaternion(camera.quaternion);
 renderer.render(scene, camera);
 }

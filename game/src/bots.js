@@ -5,8 +5,6 @@ import { castShot, damageFor, spreadDirection, aimDirection } from './combat.js'
 import { PALETTE, teamColor } from './palette.js';
 const ALLY_NAMES = ['PYRE', 'BRAND', 'COVE', 'ASH'];
 const ENEMY_NAMES = ['SLATE', 'MORROW', 'VALE', 'HARROW', 'SABLE'];
-const HOLD_ATTACK = [{ x: -6.5, z: -1 }, { x: 6.5, z: -2 }, { x: -5, z: -8.5 }, { x: 5, z: -8.5 }, { x: 0, z: 3 }];
-const HOLD_DEFEND = [{ x: -5.5, z: 1 }, { x: 5.5, z: 0 }, { x: 0, z: 4 }, { x: -4, z: -8 }, { x: 4, z: -8 }];
 const tempDir = new THREE.Vector3();
 const tempAim = new THREE.Vector3();
 const eyePoint = new THREE.Vector3();
@@ -156,7 +154,6 @@ strafeTimer: 0,
 path: [],
 pathIndex: 0,
 repathTimer: 0,
-goal: new THREE.Vector3(999, 0, 999),
 walkPhase: rng() * 6,
 stuck: 0,
 interacting: null,
@@ -175,7 +172,7 @@ const attacking = bot.team === attackerTeam;
 const spawns = attacking ? map.spawns.ember : map.spawns.warden;
 return spawns[Math.min(bot.slot, spawns.length - 1)];
 }
-function resetRound(attackerTeam, playerTeam) {
+function resetRound(attackerTeam, playerTeam, attackSite = 'A') {
 for (const bot of roster) {
 bot.team = bot.ally ? playerTeam : playerTeam === 'ember' ? 'warden' : 'ember';
 styleModel(bot);
@@ -194,10 +191,11 @@ bot.reactionLeft = 0;
 bot.path = [];
 bot.pathIndex = 0;
 bot.repathTimer = 0;
-bot.goal.set(999, 0, 999);
 bot.interacting = null;
 bot.deathTimer = 0;
 bot.stuck = 0;
+bot.siteId = bot.team === attackerTeam ? attackSite : bot.slot % 2 ? 'B' : 'A';
+bot.routeIndex = 0;
 bot.burstLeft = 0;
 bot.burstPause = 0;
 if (bot.alive) {
@@ -321,13 +319,6 @@ bot.target = null;
 }
 return best;
 }
-function setGoal(bot, x, z) {
-if (bot.goal.distanceToSquared(tempAim.set(x, 0, z)) < 4) return;
-bot.goal.set(x, 0, z);
-bot.path = map.findPath(bot.position.x, bot.position.z, x, z);
-bot.pathIndex = 0;
-bot.repathTimer = 0.9 + rng() * 0.9;
-}
 function navigate(bot, dt, dest, speed) {
 bot.repathTimer -= dt;
 if (bot.repathTimer <= 0) {
@@ -369,18 +360,20 @@ return actual;
 function objectiveFor(bot, ctx) {
 const bomb = ctx.bomb;
 const attacking = bot.team === ctx.attackerTeam;
-if (bomb.carrier === bot) {
-if (bomb.state === 'carried') return map.site;
-return HOLD_ATTACK[bot.id % HOLD_ATTACK.length];
-}
 if (bomb.state === 'planted') {
 if (!attacking) return bomb.position;
-return HOLD_ATTACK[(bot.id + 2) % HOLD_ATTACK.length];
+return map.sites[bomb.siteId];
 }
 if (bomb.state === 'dropped' && attacking) return bomb.position;
 if (ctx.now < bot.alertUntil) return bot.lastSeen;
 if (bot.target && ctx.now - bot.lastSeenAt < 2.4) return bot.lastSeen;
-return attacking ? HOLD_ATTACK[bot.id % HOLD_ATTACK.length] : HOLD_DEFEND[bot.id % HOLD_DEFEND.length];
+if (attacking) {
+const route = map.routes[bot.siteId][bot.slot % 3];
+let point = route[bot.routeIndex];
+if (point && Math.hypot(point.x - bot.position.x, point.z - bot.position.z) < 1.5) point = route[++bot.routeIndex];
+if (point) return point;
+}
+return map.sites[bot.siteId];
 }
 function engage(bot, dt, ctx) {
 const target = bot.target;
@@ -516,11 +509,12 @@ acquire(bot, ctx);
 }
 const attacking = bot.team === ctx.attackerTeam;
 const carrier = ctx.bomb.carrier === bot && ctx.bomb.state === 'carried';
-const siteDistance = Math.hypot(bot.position.x - map.site.x, bot.position.z - map.site.z);
+const site = map.sites[bot.siteId];
+const siteDistance = Math.hypot(bot.position.x - site.x, bot.position.z - site.z);
 let objectivePause = false;
-if (carrier && siteDistance < map.site.radius - 0.6) {
+if (carrier && siteDistance < site.radius - 0.6) {
 objectivePause = true;
-const face = Math.atan2(-(map.site.x - bot.position.x), -(map.site.z - bot.position.z));
+const face = Math.atan2(-(site.x - bot.position.x), -(site.z - bot.position.z));
 bot.yaw += Math.max(-5 * dt, Math.min(5 * dt, shortestAngle(bot.yaw, face)));
 bot.interacting = 'plant';
 } else if (planted && !attacking) {
@@ -537,7 +531,7 @@ bot.interacting = null;
 } else {
 bot.interacting = null;
 }
-const engaged = bot.target && bot.target.alive ? engage(bot, dt, ctx) : false;
+const engaged = !objectivePause && bot.target && bot.target.alive ? engage(bot, dt, ctx) : false;
 if (!objectivePause && !engaged) {
 const dest = objectiveFor(bot, ctx);
 const speed = ctx.now < bot.alertUntil ? 4.8 : 4.35;

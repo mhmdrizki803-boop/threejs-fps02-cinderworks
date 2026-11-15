@@ -1,4 +1,3 @@
-// Foundry map: geometry, canvas textures, lighting and the 44x44 navigation/sight grids.
 import * as THREE from 'three';
 import { PALETTE } from './palette.js';
 export const BOUNDS = 22;
@@ -32,13 +31,13 @@ const texture = new THREE.CanvasTexture(canvas);
 texture.colorSpace = THREE.SRGBColorSpace;
 return texture;
 }
-function siteTexture() {
+function siteTexture(letter, label, color) {
 const canvas = document.createElement('canvas');
 canvas.width = 512;
 canvas.height = 512;
 const ctx = canvas.getContext('2d');
 ctx.clearRect(0, 0, 512, 512);
-ctx.strokeStyle = PALETTE.hazard;
+ctx.strokeStyle = color;
 ctx.lineWidth = 12;
 ctx.beginPath();
 ctx.arc(256, 256, 210, 0, Math.PI * 2);
@@ -47,13 +46,13 @@ ctx.lineWidth = 4;
 ctx.beginPath();
 ctx.arc(256, 256, 178, 0, Math.PI * 2);
 ctx.stroke();
-ctx.fillStyle = PALETTE.hazard;
+ctx.fillStyle = color;
 ctx.font = 'bold 132px monospace';
 ctx.textAlign = 'center';
 ctx.textBaseline = 'middle';
-ctx.fillText('A', 256, 250);
-ctx.font = 'bold 34px monospace';
-ctx.fillText('PULSE SITE', 256, 350);
+ctx.fillText(letter, 256, 250);
+ctx.font = 'bold 29px monospace';
+ctx.fillText(label, 256, 350);
 for (let a = 0; a < 8; a += 1) {
 ctx.save();
 ctx.translate(256, 256);
@@ -65,29 +64,46 @@ const texture = new THREE.CanvasTexture(canvas);
 texture.colorSpace = THREE.SRGBColorSpace;
 return texture;
 }
-function signTexture() {
+function signTexture(title, sub, color) {
 const canvas = document.createElement('canvas');
 canvas.width = 512;
 canvas.height = 128;
 const ctx = canvas.getContext('2d');
 ctx.fillStyle = '#141b1f';
 ctx.fillRect(0, 0, 512, 128);
-ctx.fillStyle = PALETTE.hazard;
+ctx.fillStyle = color;
 for (let i = 0; i < 5; i += 1) {
 ctx.fillRect(i * 18, 0, 8, 14);
 ctx.fillRect(512 - 18 - i * 18, 114, 8, 14);
 }
-ctx.strokeStyle = 'rgba(240,192,74,0.55)';
+ctx.strokeStyle = color;
 ctx.lineWidth = 3;
 ctx.strokeRect(6, 6, 500, 116);
 ctx.fillStyle = '#f0d9a0';
-ctx.font = 'bold 46px monospace';
+ctx.font = 'bold 40px monospace';
 ctx.textAlign = 'center';
 ctx.textBaseline = 'middle';
-ctx.fillText('PULSE CORE', 256, 53);
-ctx.fillStyle = PALETTE.hazard;
-ctx.font = 'bold 17px monospace';
-ctx.fillText('SITE A // COOLANT LOOP', 256, 92);
+ctx.fillText(title, 256, 51);
+ctx.fillStyle = color;
+ctx.font = 'bold 16px monospace';
+ctx.fillText(sub, 256, 91);
+const texture = new THREE.CanvasTexture(canvas);
+texture.colorSpace = THREE.SRGBColorSpace;
+return texture;
+}
+function skyTexture() {
+const canvas = document.createElement('canvas');
+canvas.width = 8;
+canvas.height = 256;
+const ctx = canvas.getContext('2d');
+const grad = ctx.createLinearGradient(0, 0, 0, 256);
+grad.addColorStop(0, '#08121d');
+grad.addColorStop(0.5, '#1c3044');
+grad.addColorStop(0.7, '#7c5949');
+grad.addColorStop(0.8, '#cf7b46');
+grad.addColorStop(1, '#282322');
+ctx.fillStyle = grad;
+ctx.fillRect(0, 0, 8, 256);
 const texture = new THREE.CanvasTexture(canvas);
 texture.colorSpace = THREE.SRGBColorSpace;
 return texture;
@@ -131,6 +147,7 @@ crate: new THREE.MeshStandardMaterial({ color: '#b9c5cb', map: crateMap, roughne
 hazard: new THREE.MeshStandardMaterial({ color: PALETTE.hazard, roughness: 0.6, metalness: 0.2, emissive: new THREE.Color(PALETTE.hazard).multiplyScalar(0.12) }),
 glow: new THREE.MeshStandardMaterial({ color: PALETTE.accent, emissive: new THREE.Color(PALETTE.accent), emissiveIntensity: 1.4, roughness: 0.4 }),
 warden: new THREE.MeshStandardMaterial({ color: PALETTE.warden, emissive: new THREE.Color(PALETTE.warden), emissiveIntensity: 1.2, roughness: 0.4 }),
+coolant: new THREE.MeshStandardMaterial({ color: '#5e99ad', roughness: 0.42, metalness: 0.5, emissive: new THREE.Color(PALETTE.warden).multiplyScalar(0.18) }),
 dark: new THREE.MeshStandardMaterial({ color: '#263137', roughness: 0.9, metalness: 0.2 }),
 marking: new THREE.MeshStandardMaterial({ color: '#a88948', roughness: 0.85, metalness: 0.05 }),
 panel: new THREE.MeshStandardMaterial({ color: '#3d4c55', roughness: 0.82, metalness: 0.14 }),
@@ -160,13 +177,23 @@ stripe.raycast = () => {};
 }
 return mesh;
 }
-// Ground and the four perimeter walls.
+function cyl(r, h, x, z, material) {
+const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 14), material);
+mesh.position.set(x, h / 2, z);
+mesh.castShadow = true;
+mesh.receiveShadow = true;
+group.add(mesh);
+shootables.push(mesh);
+const bounds = new THREE.Box3().setFromObject(mesh);
+colliders.push(bounds);
+obstacles.push(bounds);
+return mesh;
+}
 box(45, 0.5, 45, 0, -0.25, 0, materials.floor, { castShadow: false, obstacle: false });
 box(44.4, 5.4, 1, 0, 2.7, -22, materials.wall);
 box(44.4, 5.4, 1, 0, 2.7, 22, materials.wall);
 box(1, 5.4, 44.4, -22, 2.7, 0, materials.wall);
 box(1, 5.4, 44.4, 22, 2.7, 0, materials.wall);
-// Low trim lights along the perimeter so the walls read at a distance.
 for (const z of [-14, 0, 14]) {
 box(0.12, 0.1, 5, -21.44, 1.05, z, materials.glow, { collide: false, obstacle: false, castShadow: false });
 box(0.12, 0.1, 5, 21.44, 1.05, z, materials.glow, { collide: false, obstacle: false, castShadow: false });
@@ -175,12 +202,10 @@ for (const x of [-14, 0, 14]) {
 box(5, 0.1, 0.12, x, 1.05, -21.44, materials.glow, { collide: false, obstacle: false, castShadow: false });
 box(5, 0.1, 0.12, x, 1.05, 21.44, materials.warden, { collide: false, obstacle: false, castShadow: false });
 }
-// Lane dividers: a west and an east wall, each with a doorway that opens onto the north yard.
 for (const side of [-1, 1]) {
 box(1, 4.6, 12, side * 10, 2.3, -16, materials.wall);
 box(1, 4.6, 4, side * 10, 2.3, -4, materials.wall);
 }
-// The furnace: the map's landmark, a hot block with a chimney and breathing vents.
 box(7, 4.4, 6, 0, 2.2, -13, materials.steel);
 box(7.4, 0.5, 6.4, 0, 0.25, -13, materials.dark);
 box(7.4, 0.35, 6.4, 0, 4.5, -13, materials.hazard, { collide: false, obstacle: false });
@@ -194,53 +219,87 @@ group.add(chimney);
 const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 0.35, 16), materials.glow);
 cap.position.set(0, 10.4, -13);
 group.add(cap);
-// Site cover: crates you can crouch behind around the pulse pad.
-obstacle(1.7, 1.25, 1.7, -3.8, -1.0);
-obstacle(1.7, 1.25, 1.7, 3.9, -2.1);
-obstacle(2.6, 0.95, 1.3, 0.3, -7.0);
-obstacle(1.2, 1.5, 1.2, -1.7, -6.6);
-// Mid approach and spawn cover.
+const siteA = { id: 'A', x: -13.5, z: -5.5, radius: 4.2, label: 'PULSE CORE' };
+const siteB = { id: 'B', x: 13.5, z: -5.5, radius: 4.2, label: 'COOLANT LOOP' };
+const sites = { A: siteA, B: siteB };
+const siteAt = (x, z) => Object.values(sites).find(s => Math.hypot(x - s.x, z - s.z) < s.radius);
+const routes = {
+A: [[{ x: -18, z: 15 }, { x: -19, z: -4 }], [{ x: -5, z: 7 }, { x: -7, z: -7.5 }], [{ x: -8, z: 1 }, { x: -12, z: -1 }]],
+B: [[{ x: 18, z: 15 }, { x: 19, z: -5 }], [{ x: 4, z: 8 }, { x: 7, z: -7.5 }], [{ x: 8, z: 1 }, { x: 12, z: -1 }]],
+};
+function padAt(s, letter, label, color, mat) {
+const ring = new THREE.Mesh(
+new THREE.PlaneGeometry(9.2, 9.2),
+new THREE.MeshBasicMaterial({ map: siteTexture(letter, label, color), transparent: true, depthWrite: false, opacity: 0.92 }),
+);
+ring.rotation.x = -Math.PI / 2;
+ring.position.set(s.x, 0.012, s.z);
+group.add(ring);
+const pad = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.16, 24), materials.dark);
+pad.position.set(s.x, 0.08, s.z);
+pad.receiveShadow = true;
+group.add(pad);
+const glow = new THREE.Mesh(new THREE.TorusGeometry(1.45, 0.05, 8, 32), mat);
+glow.rotation.x = Math.PI / 2;
+glow.position.set(s.x, 0.18, s.z);
+group.add(glow);
+}
+padAt(siteA, 'A', 'PULSE CORE', PALETTE.hazard, materials.hazard);
+padAt(siteB, 'B', 'COOLANT LOOP', PALETTE.warden, materials.warden);
+obstacle(1.8, 1.3, 1.8, -15.6, -1.6);
+obstacle(1.4, 1.1, 2.8, -16.4, -8.8);
+obstacle(2.8, 1.2, 1.4, -17, -12);
+box(2.2, 2.8, 2.2, -14.6, 1.4, -8.2, materials.steel);
+box(2.45, 0.18, 2.45, -14.6, 2.85, -8.2, materials.hazard, { collide: false, obstacle: false });
+for (const y of [0.8, 1.6, 2.4]) {
+box(2.46, 0.06, 2.46, -14.6, y, -8.2, materials.glow, { collide: false, obstacle: false, castShadow: false });
+}
+for (const [x, z] of [[16.0, -8.4], [17.2, -2.4]]) {
+cyl(0.92, 3.4, x, z, materials.coolant);
+box(1.9, 0.12, 1.9, x, 2.8, z, materials.warden, { collide: false, obstacle: false, castShadow: false });
+}
+obstacle(1.8, 1.3, 1.8, 15.4, -1.5);
+obstacle(2.6, 1.1, 1.3, 17, -12);
+box(2.0, 0.16, 4.0, 19.2, 1.3, 3.0, materials.panel);
+for (const z of [1.2, 2.6, 4.0]) {
+box(0.08, 1.0, 0.08, 18.3, 0.8, z, materials.dark, { collide: false, obstacle: false, castShadow: false });
+}
+box(2.2, 0.08, 0.08, 19.1, 2.1, 1.1, materials.warden, { collide: false, obstacle: false, castShadow: false });
+const coolantRun = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 9.0, 8), materials.coolant);
+coolantRun.rotation.z = Math.PI / 2;
+coolantRun.position.set(16.4, 3.2, -5.5);
+coolantRun.castShadow = true;
+group.add(coolantRun);
 obstacle(3.6, 1.2, 1.2, -1.5, 11.5);
 obstacle(1.3, 1.35, 3.1, 6.2, 6.0);
 obstacle(1.3, 1.0, 1.3, -6.8, 4.2);
 obstacle(2.2, 1.15, 1.2, 0.8, 1.8);
-// West lane cover and a stack of pipes.
 obstacle(2.2, 1.1, 1.3, -16.5, 12.0);
 obstacle(1.3, 1.45, 3.2, -18.2, 1.5);
 obstacle(1.5, 0.95, 1.5, -14.0, -4.2);
 box(0.55, 2.6, 0.55, -20.2, 1.3, -8.5, materials.steel);
 box(0.55, 2.6, 0.55, -20.2, 1.3, 6.5, materials.steel);
-// East lane cover.
 obstacle(1.3, 1.2, 2.3, 16.2, 9.5);
 obstacle(3.1, 1.45, 1.3, 18.2, -1.2);
 obstacle(1.5, 0.95, 1.5, 14.0, -4.4);
 box(0.55, 2.6, 0.55, 20.2, 1.3, -6.5, materials.steel);
 box(0.55, 2.6, 0.55, 20.2, 1.3, 8.5, materials.steel);
-// North spawn cover.
-obstacle(1.8, 1.2, 1.8, -6.4, -19.0);
-obstacle(1.8, 1.2, 1.8, 6.4, -19.0);
+obstacle(1.8, 1.2, 1.8, -17, -19.0);
+obstacle(1.8, 1.2, 1.8, 17, -19.0);
 obstacle(1.3, 1.0, 3.2, -13.5, -16.0);
 obstacle(1.3, 1.0, 3.2, 13.5, -16.0);
-const site = { x: 0, z: -4, radius: 4.3 };
-const ring = new THREE.Mesh(
-new THREE.PlaneGeometry(9.4, 9.4),
-new THREE.MeshBasicMaterial({ map: siteTexture(), transparent: true, depthWrite: false, opacity: 0.92 }),
+for (const [s, title, sub, color] of [
+[siteA, 'PULSE CORE', 'SITE A // PULSE CORE', PALETTE.hazard],
+[siteB, 'COOLANT LOOP', 'SITE B // COOLANT LOOP', PALETTE.warden],
+]) {
+box(5.2, 1.4, 0.12, s.x, 3.5, s.z - 4.6, materials.dark, { collide: false, obstacle: false, castShadow: false });
+const board = new THREE.Mesh(
+new THREE.PlaneGeometry(5.0, 1.2),
+new THREE.MeshBasicMaterial({ map: signTexture(title, sub, color), color: new THREE.Color('#c8bda4') }),
 );
-ring.rotation.x = -Math.PI / 2;
-ring.position.set(site.x, 0.012, site.z);
-group.add(ring);
-const pad = new THREE.Mesh(
-new THREE.CylinderGeometry(1.5, 1.5, 0.16, 24),
-materials.dark,
-);
-pad.position.set(site.x, 0.08, site.z);
-pad.receiveShadow = true;
-group.add(pad);
-const padGlow = new THREE.Mesh(new THREE.TorusGeometry(1.45, 0.05, 8, 32), materials.hazard);
-padGlow.rotation.x = Math.PI / 2;
-padGlow.position.set(site.x, 0.18, site.z);
-group.add(padGlow);
-// Wall panels, a service pipe and floor guide lines break up the grey faces.
+board.position.set(s.x, 3.5, s.z - 4.54);
+group.add(board);
+}
 for (const x of [-17, -11, 11, 17]) {
 box(4.6, 2.5, 0.07, x, 2.8, -21.44, materials.panel, { collide: false, obstacle: false, castShadow: false });
 box(4.6, 2.5, 0.07, x, 2.8, 21.44, materials.panel, { collide: false, obstacle: false, castShadow: false });
@@ -275,17 +334,19 @@ group.add(band);
 }
 const sign = new THREE.Mesh(
 new THREE.PlaneGeometry(5.4, 1.35),
-new THREE.MeshBasicMaterial({ map: signTexture(), color: new THREE.Color('#c8bda4') }),
+new THREE.MeshBasicMaterial({ map: signTexture('MID CONTROL', 'LONG // SHORT CONNECTOR', PALETTE.hazard), color: new THREE.Color('#c8bda4') }),
 );
 sign.position.set(0, 3.72, -9.96);
 group.add(sign);
-// Lamp posts: warm at the site, cold along the lanes.
 const lampSpots = [
-[0, -8.5, PALETTE.accent, 16],
-[-16, 3, PALETTE.accent, 9],
-[16, 3, PALETTE.accent, 9],
-[0, 15, PALETTE.warden, 7],
-[0, -19, PALETTE.warden, 7],
+[-16.5, -1.5, PALETTE.hazard, 15],
+[-11.3, -9.0, PALETTE.hazard, 10],
+[16.5, -1.5, PALETTE.warden, 15],
+[11.3, -9.0, PALETTE.warden, 10],
+[-17, 10, PALETTE.hazard, 7],
+[17, 10, PALETTE.warden, 7],
+[0, 15, PALETTE.warden, 6],
+[0, -19, PALETTE.warden, 6],
 ];
 for (const [x, z, color, intensity] of lampSpots) {
 const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 4.2, 8), materials.steel);
@@ -299,20 +360,19 @@ const light = new THREE.PointLight(new THREE.Color(color), intensity * 1.7, 15, 
 light.position.set(x, 4.1, z);
 group.add(light);
 }
-// Sky: a cold gradient above the yard and a low sun behind the furnace.
 const sky = new THREE.Mesh(
 new THREE.SphereGeometry(90, 24, 16),
-new THREE.MeshBasicMaterial({ color: new THREE.Color('#152832'), side: THREE.BackSide, fog: false }),
+new THREE.MeshBasicMaterial({ map: skyTexture(), side: THREE.BackSide, fog: false }),
 );
 scene.add(sky);
 scene.background = new THREE.Color('#101b21');
-scene.fog = new THREE.Fog(new THREE.Color('#17242b'), 34, 98);
-const hemi = new THREE.HemisphereLight(new THREE.Color('#b8d2df'), new THREE.Color('#4a3d2e'), 1.85);
+scene.fog = new THREE.Fog(new THREE.Color('#26313a'), 30, 96);
+const hemi = new THREE.HemisphereLight(new THREE.Color('#b8d2df'), new THREE.Color('#4a3d2e'), 1.75);
 scene.add(hemi);
-const ambient = new THREE.AmbientLight(new THREE.Color('#8ea3b0'), 0.32);
+const ambient = new THREE.AmbientLight(new THREE.Color('#8ea3b0'), 0.3);
 scene.add(ambient);
-const key = new THREE.DirectionalLight(new THREE.Color('#ffe0b0'), 2.7);
-key.position.set(-14, 22, -8);
+const key = new THREE.DirectionalLight(new THREE.Color('#ffd2a0'), 2.5);
+key.position.set(-14, 20, -10);
 key.target.position.set(0, 0, -4);
 key.castShadow = true;
 key.shadow.mapSize.set(2048, 2048);
@@ -330,13 +390,11 @@ scene.add(fill);
 const siteLight = new THREE.PointLight(new THREE.Color(PALETTE.hazard), 18, 18, 1.8);
 siteLight.position.set(0, 3.2, -4);
 group.add(siteLight);
-// Coloured smoke stacks in the far skyline, purely cosmetic.
 for (const [x, z, h] of [[-18, -24, 12], [14, -25, 9]]) {
 const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.1, h, 10), materials.dark);
 stack.position.set(x, h / 2, z);
 group.add(stack);
 }
-// --- Navigation grid -----------------------------------------------------
 const navSolid = new Uint8Array(COLS * COLS);
 const sightSolid = new Uint8Array(COLS * COLS);
 const min = -BOUNDS;
@@ -411,7 +469,7 @@ const NEIGHBORS = [
 [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
 [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2],
 ];
-// A* on the 1 m grid. Grids are small (44 x 44) so flat typed arrays beat cleverness.
+// A* on the 1 m grid, with no diagonal corner cutting.
 function findPath(fromX, fromZ, toX, toZ) {
 const start = nearestOpen(fromX, fromZ);
 const goal = nearestOpen(toX, toZ);
@@ -420,8 +478,8 @@ const point = cellCenter(goal.ix, goal.iz);
 return [point];
 }
 const total = COLS * COLS;
-const g = new Float32Array(total).fill(Infinity);
-const f = new Float32Array(total).fill(Infinity);
+const g = new Float64Array(total).fill(Infinity);
+const f = new Float64Array(total).fill(Infinity);
 const came = new Int32Array(total).fill(-1);
 const closed = new Uint8Array(total);
 const open = [];
@@ -454,7 +512,7 @@ g[index] = tentative;
 const h = heuristic(nx, nz, goal.ix, goal.iz);
 f[index] = tentative + h;
 came[index] = current;
-open.push(index);
+if (!open.includes(index)) open.push(index);
 }
 }
 }
@@ -492,7 +550,6 @@ if (sightSolid[iz * COLS + ix]) return false;
 }
 return true;
 }
-// Walls are tall enough to see over the crates, so a bullet may clear a box the grid flags.
 const ray = new THREE.Ray();
 const hitPoint = new THREE.Vector3();
 const wallDistance = (origin, direction, maxDistance) => {
@@ -514,7 +571,7 @@ ember: [
 ],
 warden: [
 { x: 0, z: -18.5 }, { x: -6, z: -17.5 }, { x: 6, z: -17.5 },
-{ x: -10.5, z: -16 }, { x: 10.5, z: -16 },
+{ x: -8, z: -16 }, { x: 8, z: -16 },
 ],
 };
 return {
@@ -522,7 +579,9 @@ group,
 colliders,
 obstacles,
 shootables,
-site,
+sites,
+siteAt,
+routes,
 spawns,
 bounds: BOUNDS,
 materials,

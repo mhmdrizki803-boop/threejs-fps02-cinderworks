@@ -136,11 +136,11 @@ phase = 'BUY PHASE';
 } else if (state.phase === 'live') {
 if (planted) {
 display = clock(state.bomb.timer);
-phase = 'CORE ARMED';
+phase = `SITE ${state.bomb.siteId} ARMED`;
 low = state.bomb.timer < 10;
 } else {
 display = clock(state.roundTimer);
-phase = state.sideOf(state.playerTeam) === 'attack' ? 'PULSE SITE A' : 'DEFEND SITE A';
+phase = state.sideOf(state.playerTeam) === 'attack' ? 'ATTACK A / B' : 'DEFEND A / B';
 low = state.roundTimer < 15;
 }
 } else if (state.phase === 'roundEnd') {
@@ -308,11 +308,16 @@ if (!map.navSolid[iz * 44 + ix]) continue;
 g.fillRect(ix * scale, iz * scale, scale + 0.4, scale + 0.4);
 }
 }
-g.strokeStyle = 'rgba(242,161,60,0.7)';
+for (const site of Object.values(map.sites)) {
+g.strokeStyle = site.id === 'A' ? '#f2a13c' : '#54b6d8';
 g.lineWidth = 1.5;
 g.beginPath();
-g.arc((map.site.x + 22) * scale, (map.site.z + 22) * scale, map.site.radius * scale, 0, Math.PI * 2);
+g.arc((site.x + 22) * scale, (site.z + 22) * scale, site.radius * scale, 0, Math.PI * 2);
 g.stroke();
+g.fillStyle = g.strokeStyle;
+g.font = 'bold 10px monospace';
+g.fillText(site.id, (site.x + 22) * scale - 3, (site.z + 22) * scale + 3);
+}
 }
 function setRadar(data, dt) {
 radarAccum += dt;

@@ -103,7 +103,8 @@ if (entity === null) return;
 if (entity.isPlayer) state.playerMoney = Math.min(MAX_MONEY, state.playerMoney + amount);
 else if (entity.money !== undefined) entity.money = Math.min(MAX_MONEY, entity.money + amount);
 }
-function plant(planter, x, z) {
+function plant(planter, x, z, siteId) {
+state.bomb.siteId = siteId;
 state.bomb.state = 'planted';
 state.bomb.carrier = null;
 state.bomb.position.x = x;
@@ -113,7 +114,7 @@ state.bomb.plantProgress = 0;
 state.bomb.defuseProgress = 0;
 state.bomb.beepTimer = 0;
 addKillReward(planter, 300);
-setBanner('PULSE CORE ARMED', 'DEFEND THE SITE', 3);
+setBanner('PULSE CORE ARMED', `DEFEND SITE ${siteId}`, 3);
 }
 function defused(by) {
 state.bomb.state = 'defused';
@@ -139,7 +140,7 @@ if (state.buyTimer === 0) {
 state.phase = 'live';
 state.roundTimer = ROUND_TIME;
 state.phaseTimer = 0;
-setBanner(`ROUND ${state.round}`, state.sideOf(state.playerTeam) === 'attack' ? 'PULSE SITE A' : 'DEFEND THE SITE', 2.2);
+setBanner(`ROUND ${state.round}`, state.sideOf(state.playerTeam) === 'attack' ? `MOVE ON SITE ${state.attackSite}` : 'DEFEND A / B', 2.2);
 ctx.onLive?.();
 }
 } else if (state.phase === 'live') {
