@@ -63,7 +63,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 #bombstatus[hidden] { display: none; }
 #bombstatus .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); box-shadow: 0 0 12px var(--red); animation: pulse .55s infinite; }
 #bomb-timer { color: var(--hazard); font-size: 16px; font-weight: 700; }
-#killfeed { position: absolute; top: 20px; right: 22px; display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
+#killfeed { position: absolute; top: 24px; right: 30px; display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
 .feed { display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: rgba(9, 13, 16, .84); border-right: 3px solid var(--amber); font-size: 12px; letter-spacing: .04em; animation: feedin .18s ease-out; }
 .feed.enemy { border-right-color: var(--cyan); }
 .feed.self { border-right-color: var(--green); }
@@ -110,21 +110,21 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 #radar-wrap { position: absolute; left: 26px; bottom: 96px; width: 148px; height: 148px; border: 1px solid var(--line); background: rgba(7, 11, 14, .92); box-shadow: 0 4px 20px rgba(0,0,0,.4); }
 #radar { width: 100%; height: 100%; display: block; }
 .radar-cap { position: absolute; left: 0; right: 0; bottom: -17px; text-align: center; font-family: var(--font-mono); font-size: 9px; letter-spacing: .2em; color: var(--muted); }
-#money { position: absolute; right: 30px; bottom: 96px; font-family: var(--font-mono); font-size: 26px; font-weight: 700; color: var(--green); text-shadow: 0 2px 10px rgba(0,0,0,.6); }
+#money { position: absolute; right: 32px; bottom: 104px; font-family: var(--font-mono); font-size: 26px; font-weight: 700; color: var(--green); text-shadow: 0 2px 10px rgba(0,0,0,.6); }
 #money .cur { font-size: 15px; color: var(--muted); margin-right: 3px; }
-#ammo { position: absolute; right: 30px; bottom: 24px; text-align: right; }
+#ammo { position: absolute; right: 32px; bottom: 22px; text-align: right; }
 #wpn-name { font-size: 10px; letter-spacing: .22em; color: var(--muted); }
 #ammo .nums { font-family: var(--font-mono); line-height: .9; }
 #ammo-mag { font-size: 52px; font-weight: 700; letter-spacing: -.04em; }
 #ammo-reserve { font-size: 17px; color: var(--muted); margin-left: 7px; }
 #ammo.empty #ammo-mag { color: var(--red); }
-#grenades { position: absolute; right: 30px; bottom: 132px; display: flex; gap: 6px; }
+#grenades { position: absolute; right: 32px; bottom: 142px; display: flex; gap: 6px; }
 .gchip { padding: 3px 6px; border: 1px solid var(--line); background: rgba(8,12,15,.72); font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em; color: var(--muted); }
 .gchip b { color: var(--amber); margin-right: 4px; }
 .gchip i { font-style: normal; color: var(--ink); margin-left: 5px; }
 .gchip.sel { border-color: var(--amber); background: var(--amber-soft); color: var(--ink); }
 .gchip.empty { opacity: .38; }
-#stance { position: absolute; right: 30px; bottom: 160px; font-family: var(--font-mono); font-size: 10px; letter-spacing: .2em; color: var(--hazard); opacity: 0; }
+#stance { position: absolute; right: 32px; bottom: 170px; font-family: var(--font-mono); font-size: 10px; letter-spacing: .2em; color: var(--hazard); opacity: 0; }
 #stance.on { opacity: 1; }
 #reload { position: absolute; left: 50%; top: calc(50% + 46px); transform: translateX(-50%); font-family: var(--font-mono); font-size: 10px; letter-spacing: .22em; color: var(--hazard); opacity: 0; transition: opacity 90ms; }
 #reload.on { opacity: 1; animation: pulse .8s infinite; }
@@ -211,7 +211,7 @@ td .chip { display: inline-block; width: 7px; height: 7px; border-radius: 50%; m
 .menu kbd { display: inline-block; min-width: 20px; padding: 1px 5px; margin-right: 7px; border: 1px solid var(--line); font-family: var(--font-mono); font-size: 10px; color: var(--ink); text-align: center; }
 @media (max-width: 900px) {
 #radar-wrap { display: none; }
-#money { bottom: 88px; }
+#money { bottom: 96px; }
 .buy-grid { grid-template-columns: 1fr; }
 }
 </style>
