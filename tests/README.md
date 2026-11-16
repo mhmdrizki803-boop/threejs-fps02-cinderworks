@@ -1,6 +1,7 @@
 # Harness taktik
 
-Harness browser untuk kontrak ekonomi bot, payout ronde, dan total uang papan skor.
+Harness browser untuk ekonomi bot, payout ronde, papan skor, anchor site,
+recovery core, serta plant/defuse fisik.
 
 ## Menjalankan
 
@@ -54,8 +55,11 @@ Output sementara milik tes dibersihkan setelah selesai.
   `finally`; server mendapat SIGKILL jika SIGTERM belum menghentikannya.
 - Halaman `http://localhost:8188/?shot=menu&seed=3` membekukan simulasi otomatis.
   Tiap kasus dimulai dengan `restartMatch('attack')` atau `restartMatch('defend')`
-  dan input kosong. Fixture pembelian berada di bawah harga Talon agar pilihan
-  senjata acak tidak memengaruhi hasil.
+  dan input kosong. Runner juga memulihkan `botCtx.combatants` ke
+  `[player.state, ...bots.roster]`, referensi player/bomb/roster, `now` ke
+  `match.state.now`, serta `attackerTeam` ke tim attacker saat ini.
+  Fixture pembelian berada di bawah harga Talon agar pilihan senjata acak
+  tidak memengaruhi hasil.
 - Route `/src/main.js` membaca langsung `game/src/main.js` dan menambahkan
   `window.testGame` dalam respons browser. API yang diekspos:
   `{map,bots,match,player,input,loadout,botCtx,matchCtx,hud,rowsForBoard,pickupBombIfDropped,updateObjective,simulationStep,restartMatch,buyItem,shoot,applyDamage,grenades,updateGrenades,effects,scene,throwGrenade}`.
@@ -63,8 +67,9 @@ Output sementara milik tes dibersihkan setelah selesai.
   Request eksternal diblokir dan menyebabkan kegagalan. `pageerror`, console
   error, request gagal, respons HTTP error, serta error routing/proses server
   juga dilaporkan sebagai assertion.
-- Setiap assertion mencetak nomor, `PASS`/`FAIL`, nama kasus, aktual, harapan,
-  dan bukti tambahan bila relevan. Ringkasan memuat jumlah assertion dan kasus.
+- Default mencetak hasil per kasus dan seluruh assertion yang gagal beserta
+  aktual, harapan, dan bukti. `node tests/tactics.mjs --verbose` mencetak setiap
+  assertion yang lolos juga. Ringkasan memuat jumlah assertion dan kasus.
   Exit code `0` berarti semua assertion lolos; `1` berarti ada kegagalan.
 
 Kasus mencakup:
@@ -95,6 +100,52 @@ Kasus mencakup:
 Harapan pengujian memakai nilai kontrak eksplisit. Kegagalan assertion tetap
 tercatat sambil menjalankan kasus berikutnya; timeout menghentikan rangkaian.
 
+## Step 2: bukti navigasi dan objective
+
+Ekspektasi eksekusi normal: **205 asersi baseline ekonomi + 143 asersi baru =
+348 asersi**, dalam **32 kasus**. Jumlah ini merupakan harapan; hasil runtime
+dicetak oleh harness saat dijalankan.
+
+| Cakupan baru | Kasus | Asersi |
+| --- | ---: | ---: |
+| Hold A `(-12,-8)` / B `(12,-8)`, grid/body bebas collision, garis pandang ke approach | 1 | 6 |
+| Dua anchor, satu per site; kedua pilihan tim pemain × awal/halftime; perjalanan dari spawn dan sudut stabil | 4 | 56 |
+| Reset `botCtx` sesudah fixture navigasi mengubah perception, clock, dan attacker | 1 | 2 |
+| Noise benar-benar tercatat; anchor tetap holding saat alert aktif dan setelah kedaluwarsa | 1 | 8 |
+| Recovery terdekat mengalahkan target/memori/path lama; cover tetap pada route; recoverer mati digantikan | 1 | 8 |
+| Picker terdekat dibanding dua attacker dalam radius, dengan defender/bot mati yang lebih dekat | 1 | 6 |
+| Defender/player defender dan attacker mati dilewati; batas ketat `<1.3` | 1 | 3 |
+| Carrier pemain mati → recovery dan plant A; carrier bot mati → recovery dan plant B | 2 | 30 |
+| Anchor B retake A dengan kit; anchor A retake B tanpa kit; defuse fisik dan kemenangan ronde | 2 | 24 |
+
+Metode deterministik:
+
+- `botCtx.combatants = []` mengisolasi perception. Status target/memori/path
+  lama hanya dipasang pada calon recoverer yang sedang diuji; bot cover
+  mempertahankan perilaku route nyata.
+- Tiap tick menaikkan `botCtx.now` dan menyamakan `match.state.now`, lalu
+  memanggil `bots.step(1 / 60, botCtx)`. Tes objective melanjutkan dengan
+  `pickupBombIfDropped()` dan `updateObjective(1 / 60)`. Maksimum perjalanan
+  adalah 1800 tick (30 detik logis); timer ronde tidak ikut melompati fase.
+- Posisi actor dipasang saat fixture awal. Selama perjalanan, posisi hanya
+  berubah lewat kode game. Trace memeriksa collision menggunakan
+  `createMover(map.colliders)`, jarak yang ditempuh, dan langkah maksimum
+  `0.081` meter per tick; posisi awal/akhir menjadi bukti anti-teleport.
+- Anchor berangkat dari spawn hasil `resetRound`, mencapai jarak `<0.9` dari
+  hold, mendapat 90 tick untuk menghadap approach, lalu diuji selama 120 tick
+  holding tanpa pergerakan. Galat yaw dibungkus pada sudut ±π dan dibatasi
+  `1e-6` radian, menghadap approach A `(-12,-1)` / B `(12,-1)`.
+- Recovery melalui kematian memakai `applyDamage`. Kompetisi picker memakai
+  jarak berbeda agar bebas tie, dan memeriksa progress plant reset pada drop
+  maupun pickup, site baru, route langsung ke site, serta repath reset.
+- Tes plant memakai perjalanan/pickup nyata dan progress parsial dari
+  `updateObjective`: durasi penuh 3.2 detik, dengan toleransi satu tick untuk
+  floating point. Core akhirnya berada di posisi plant fisik bot.
+- Fixture retake memasang core lewat `match.plant` dan menyisakan satu defender
+  untuk mengukur kit secara mandiri. Defender itu berangkat dari hold site
+  lain. Progress setelah 120 tick harus 0.4 dengan kit atau 0.2 tanpa kit;
+  penyelesaian memerlukan 5/10 detik penuh, dengan toleransi satu tick.
+
 ## Menambah pengujian bot, granat, atau gunplay
 
 Tambahkan `test('Nama kasus', async (page) => { ... })` sebelum `main()`.
@@ -106,11 +157,26 @@ Di `page.evaluate`, gunakan `window.testGame` untuk API permainan dan
 
 - `setEconomy(...)`: memasang uang, streak, primary, armor, helmet, dan kit;
   kemudian menyinkronkan gun bot.
+- `restoreBotContext()`: memulihkan semua referensi perception, tim, dan clock
+  yang dipakai fixture. Panggil setelah restart tambahan di dalam kasus.
+- `isolateBots()`: menyinkronkan konteks, mengosongkan combatants, membuka fase
+  live, dan membersihkan input untuk pengujian bot tanpa lawan terlihat.
 - `bots()`, `balances()`, `match()`: snapshot scalar untuk assertion Node.
+- `actor(bot)`, `bomb()`: snapshot posisi, role/interaction, route/repath,
+  carrier, defuser, serta progress objective.
+- `blocked(x,z,bot)`: menguji ruang body actor pada collider game.
 - `board()`: memanggil `hud.refreshBoard(rowsForBoard(), match.state)` dan
   mengambil judul, label total, serta baris DOM.
 - `step(ticks)`: menjalankan `simulationStep(1 / 60)` sebanyak tick integer
   yang ditentukan, tanpa menunggu waktu nyata.
+- `botTick({objectives,beforeObjective})`: satu tick bot dengan jam manual;
+  hook berada sesudah pickup dan sebelum update objective.
+- `advanceBots(ticks,{watch,objectives,until,face,beforeObjective,observe})`:
+  menjalankan tick terbatas sambil mengumpulkan trace collision/pergerakan,
+  durasi holding, dan galat yaw. `until` menghentikan perjalanan ketika tujuan
+  nyata tercapai; hook dapat mengukur progress/timing objective.
+- `settleAnchors()`: perjalanan dari spawn sampai dua anchor benar-benar
+  holding, disertai pemanasan yaw dan hasil trace.
 
 Gunakan `equal(label, aktual, harapan, buktiOpsional)` agar assertion baru ikut
 dihitung dan menghasilkan bukti `PASS`/`FAIL`. Callback `page.evaluate` harus

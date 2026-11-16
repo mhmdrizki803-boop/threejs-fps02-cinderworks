@@ -219,8 +219,8 @@ group.add(chimney);
 const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 0.35, 16), materials.glow);
 cap.position.set(0, 10.4, -13);
 group.add(cap);
-const siteA = { id: 'A', x: -13.5, z: -5.5, radius: 4.2, label: 'PULSE CORE' };
-const siteB = { id: 'B', x: 13.5, z: -5.5, radius: 4.2, label: 'COOLANT LOOP' };
+const siteA = { id: 'A', x: -13.5, z: -5.5, radius: 4.2, label: 'PULSE CORE', hold: { x: -12, z: -8 } };
+const siteB = { id: 'B', x: 13.5, z: -5.5, radius: 4.2, label: 'COOLANT LOOP', hold: { x: 12, z: -8 } };
 const sites = { A: siteA, B: siteB };
 const siteAt = (x, z) => Object.values(sites).find(s => Math.hypot(x - s.x, z - s.z) < s.radius);
 const routes = {

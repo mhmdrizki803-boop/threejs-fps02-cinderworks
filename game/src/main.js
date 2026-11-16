@@ -459,12 +459,14 @@ match.pickup(player.state);
 if (!shotMode) audio.buy();
 return;
 }
-for (const bot of bots.roster) {
-if (!bot.alive || bot.team !== state.attackerTeam) continue;
-if (Math.hypot(bot.position.x - bomb.position.x, bot.position.z - bomb.position.z) < 1.3) {
+const bot = bots.nearestAttacker(state.attackerTeam, bomb.position, 1.3);
+if (bot) {
 match.pickup(bot);
+// A replacement carrier goes straight to the site, not back through its old spawn route.
+bot.siteId = state.attackSite ?? bot.siteId;
+bot.routeIndex = map.routes[bot.siteId][bot.slot % 3].length;
+bot.repathTimer = 0;
 return;
-}
 }
 }
 function buyData() {

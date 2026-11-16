@@ -183,6 +183,8 @@ bot.interacting = null;
 bot.deathTimer = 0;
 bot.stuck = 0;
 bot.siteId = bot.team === attackerTeam ? attackSite : bot.slot % 2 ? 'B' : 'A';
+bot.anchor = bot.team !== attackerTeam && bot.slot <= (bot.ally ? 2 : 1);
+bot.holding = bot.recovering = false;
 bot.routeIndex = 0;
 bot.burstLeft = 0;
 bot.burstPause = 0;
@@ -233,6 +235,16 @@ function aliveCount(team) {
 let count = 0;
 for (const bot of roster) if (bot.alive && bot.team === team) count += 1;
 return count;
+}
+// Nearest live attacker coordinates recovery and uses the same eligibility as pickup.
+function nearestAttacker(team, position, range = Infinity) {
+let nearest = null;
+for (const bot of roster) {
+if (!bot.alive || bot.team !== team) continue;
+const distance = Math.hypot(bot.position.x - position.x, bot.position.z - position.z);
+if (distance < range) { range = distance; nearest = bot; }
+}
+return nearest;
 }
 function damage(bot, amount, part) {
 if (!bot.alive) return false;
@@ -318,7 +330,7 @@ waypoint = bot.path[bot.pathIndex];
 }
 if (!waypoint) {
 const distance = Math.hypot(dest.x - bot.position.x, dest.z - bot.position.z);
-if (distance < 1.2) return 0;
+if (distance < 0.55) return 0;
 waypoint = dest;
 }
 const dx = waypoint.x - bot.position.x;
@@ -342,14 +354,16 @@ bot.yaw += (rng() - 0.5) * 1.4;
 }
 return actual;
 }
-function objectiveFor(bot, ctx) {
+// Site anchors hold approaches; one attacker retrieves a dropped core while others cover.
+function objectiveFor(bot, ctx, recoverer) {
 const bomb = ctx.bomb;
 const attacking = bot.team === ctx.attackerTeam;
 if (bomb.state === 'planted') {
 if (!attacking) return bomb.position;
 return map.sites[bomb.siteId];
 }
-if (bomb.state === 'dropped' && attacking) return bomb.position;
+if (bot === recoverer) return bomb.position;
+if (!attacking && bot.anchor) return map.sites[bot.siteId].hold;
 if (ctx.now < bot.alertUntil) return bot.lastSeen;
 if (bot.target && ctx.now - bot.lastSeenAt < 2.4) return bot.lastSeen;
 if (attacking) {
@@ -481,8 +495,10 @@ bot.model.parts.pack.visible = Boolean(ctx?.bomb && ctx.bomb.carrier === bot && 
 }
 function step(dt, ctx) {
 const planted = ctx.bomb.state === 'planted';
+const recoverer = ctx.bomb.state === 'dropped' ? nearestAttacker(ctx.attackerTeam, ctx.bomb.position) : null;
 for (const bot of roster) {
 if (!bot.alive) {
+bot.holding = bot.recovering = false;
 animate(bot, dt, ctx);
 continue;
 }
@@ -493,6 +509,9 @@ bot.thinkTimer = 0.11 + rng() * 0.07;
 acquire(bot, ctx);
 }
 const attacking = bot.team === ctx.attackerTeam;
+const recovering = bot === recoverer;
+if (recovering !== bot.recovering) { bot.recovering = recovering; bot.repathTimer = 0; }
+bot.holding = false;
 const carrier = ctx.bomb.carrier === bot && ctx.bomb.state === 'carried';
 const site = map.sites[bot.siteId];
 const siteDistance = Math.hypot(bot.position.x - site.x, bot.position.z - site.z);
@@ -516,14 +535,21 @@ bot.interacting = null;
 } else {
 bot.interacting = null;
 }
-const engaged = !objectivePause && bot.target && bot.target.alive ? engage(bot, dt, ctx) : false;
+const engaged = !objectivePause && !recovering && bot.target && bot.target.alive ? engage(bot, dt, ctx) : false;
 if (!objectivePause && !engaged) {
-const dest = objectiveFor(bot, ctx);
+const dest = objectiveFor(bot, ctx, recoverer);
 const speed = ctx.now < bot.alertUntil ? 4.8 : 4.35;
+if (bot.anchor && dest === site.hold && Math.hypot(bot.position.x - dest.x, bot.position.z - dest.z) < 0.9) {
+bot.holding = true;
+const approach = map.routes[bot.siteId][2].at(-1);
+const face = Math.atan2(-(approach.x - bot.position.x), -(approach.z - bot.position.z));
+bot.yaw += Math.max(-5 * dt, Math.min(5 * dt, shortestAngle(bot.yaw, face)));
+} else {
 navigate(bot, dt, dest, speed);
+}
 }
 animate(bot, dt, ctx);
 }
 }
-return { roster, resetRound, buy, refreshGuns, aliveCount, damage, hear, step, styleModel, syncModels };
+return { roster, resetRound, buy, refreshGuns, aliveCount, nearestAttacker, damage, hear, step, styleModel, syncModels };
 }

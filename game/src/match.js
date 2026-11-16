@@ -126,10 +126,12 @@ state.bomb.state = 'dropped';
 state.bomb.carrier = null;
 state.bomb.position.x = x;
 state.bomb.position.z = z;
+state.bomb.plantProgress = 0;
 }
 function pickup(carrier) {
 state.bomb.state = 'carried';
 state.bomb.carrier = carrier;
+state.bomb.plantProgress = 0;
 }
 function step(dt, ctx) {
 state.now += dt;
