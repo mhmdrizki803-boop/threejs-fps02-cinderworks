@@ -562,20 +562,13 @@ const spawn = (side === 'attack' ? map.spawns.ember : map.spawns.warden)[0];
 player.respawn(spawn, player.state.team);
 player.state.yaw = side === 'attack' ? 0 : Math.PI;
 gunRefill(pistol);
-if (loadout.primary) {
-loadout.primary.cooldown = 0;
-loadout.primary.reloadLeft = 0;
-loadout.primary.mag = loadout.primary.def.mag;
-loadout.primary.reserve = loadout.primary.def.reserve;
-loadout.primary.bloom = 0;
-loadout.primary.shotIndex = 0;
-}
+if (loadout.primary) gunRefill(loadout.primary);
 equipGun();
 view.state.lowered = false;
 state.attackSite = rng() < 0.5 ? 'A' : 'B';
 state.bomb.siteId = null;
 bots.resetRound(state.attackerTeam, player.state.team, state.attackSite);
-bots.buy(state.attackerTeam);
+bots.buy(state.attackerTeam, state.lossStreak);
 bots.refreshGuns();
 if (side === 'attack') {
 match.pickup(player.state);

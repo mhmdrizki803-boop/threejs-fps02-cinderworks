@@ -27,6 +27,10 @@ radar: $('radar'),
 buy: $('buy'), buyMoney: $('buy-money'), buyTimer: $('buy-timer'), buyGrid: $('buy-grid'), buyClose: $('buy-close'),
 board: $('scoreboard'), boardEmber: $('board-ember'), boardWarden: $('board-warden'), boardScore: $('board-score'), boardClose: $('board-close'),
 };
+const teamTitles = {
+ember: els.boardEmber.closest('.board-team').querySelector('h3'),
+warden: els.boardWarden.closest('.board-team').querySelector('h3'),
+};
 const ctx = els.radar.getContext('2d');
 let callbacks = { play: null, buy: null, closeBuy: null, closeBoard: null };
 let buyOpen = false;
@@ -269,6 +273,12 @@ boardOpen = open;
 els.board.hidden = !open;
 }
 function refreshBoard(rows, state) {
+// Team budget includes the player and fallen members, not just survivors.
+for (const team of ['ember', 'warden']) {
+let money = 0;
+for (const row of rows) if (row.team === team) money += row.money;
+teamTitles[team].textContent = `${team.toUpperCase()} — TOTAL $${Math.round(money)}`;
+}
 const make = (team) => rows.filter((row) => row.team === team).map((row) => {
 const me = row.me ? 'me' : '';
 const dead = row.alive ? '' : 'dead';

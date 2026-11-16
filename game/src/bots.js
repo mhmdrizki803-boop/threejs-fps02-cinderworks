@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createMover } from './physics.js';
-import { createGun, stepGun, gunReady, gunFire, gunReload, gunRefill, WEAPONS } from './weapon.js';
-import { castShot, damageFor, spreadDirection, aimDirection } from './combat.js';
+import { createGun, stepGun, gunReady, gunFire, gunReload, WEAPONS } from './weapon.js';
+import { castShot, damageFor, spreadDirection } from './combat.js';
 import { PALETTE, teamColor } from './palette.js';
 const ALLY_NAMES = ['PYRE', 'BRAND', 'COVE', 'ASH'];
 const ENEMY_NAMES = ['SLATE', 'MORROW', 'VALE', 'HARROW', 'SABLE'];
@@ -92,10 +92,6 @@ parts.armL = armL;
 parts.armR = armR;
 parts.gun = gun;
 parts.pack = pack;
-parts.vest = vest;
-parts.dark = dark;
-parts.chest = chest;
-parts.visor = visor;
 return { group, parts };
 }
 function styleModel(bot) {
@@ -104,12 +100,6 @@ for (const entry of bot.model.parts.materials) {
 entry.material.color.set(color);
 if (entry.material.emissive) entry.material.emissive.set(color);
 }
-bot.model.parts.chest.material.color.set(color);
-bot.model.parts.chest.material.emissive.set(color);
-bot.model.parts.visor.material.color.set(color);
-bot.model.parts.visor.material.emissive.set(color);
-bot.model.parts.pack.material.color.set(color);
-bot.model.parts.pack.material.emissive.set(color);
 }
 export function createBotSystem(scene, map, rng) {
 const mover = createMover(map.colliders);
@@ -160,7 +150,6 @@ interacting: null,
 deathTimer: 0,
 stepTimer: 0,
 model,
-radiusShake: 0,
 };
 roster.push(bot);
 return bot;
@@ -177,8 +166,7 @@ for (const bot of roster) {
 bot.team = bot.ally ? playerTeam : playerTeam === 'ember' ? 'warden' : 'ember';
 styleModel(bot);
 const spawn = spawnFor(bot, attackerTeam);
-const jitter = bot.ally ? 0 : 0.0;
-bot.position.set(spawn.x + jitter, 0, spawn.z);
+bot.position.set(spawn.x, 0, spawn.z);
 bot.yaw = bot.team === attackerTeam ? 0 : Math.PI;
 bot.pitch = 0;
 bot.health = 100;
@@ -198,10 +186,7 @@ bot.siteId = bot.team === attackerTeam ? attackSite : bot.slot % 2 ? 'B' : 'A';
 bot.routeIndex = 0;
 bot.burstLeft = 0;
 bot.burstPause = 0;
-if (bot.alive) {
 bot.gun = createGun(bot.primaryId ?? 'kestrel');
-gunRefill(bot.gun);
-}
 bot.model.group.visible = true;
 bot.model.group.rotation.set(0, bot.yaw, 0);
 bot.model.group.position.set(bot.position.x, 0, bot.position.z);
@@ -215,8 +200,11 @@ bot.model.parts.legR.rotation.set(0, 0, 0);
 function sideOf(bot, attackerTeam) {
 return bot.team === attackerTeam ? 'attack' : 'defend';
 }
-function buy(attackerTeam) {
+// Loss-streak eco: save for a rifle and armor rather than force-buying every round.
+function buy(attackerTeam, lossStreak = {}) {
 for (const bot of roster) {
+bot.eco = (lossStreak[bot.team] ?? 0) >= 2 && bot.money < WEAPONS.longbow.price + 650;
+if (bot.eco) continue;
 const defender = sideOf(bot, attackerTeam) === 'defend';
 if (!bot.primaryId) {
 if (bot.money >= WEAPONS.talon.price && rng() < 0.16) {
@@ -239,10 +227,7 @@ bot.hasKit = true; bot.money -= 400;
 }
 }
 function refreshGuns() {
-for (const bot of roster) {
-bot.gun = createGun(bot.primaryId ?? 'kestrel');
-gunRefill(bot.gun);
-}
+for (const bot of roster) bot.gun = createGun(bot.primaryId ?? 'kestrel');
 }
 function aliveCount(team) {
 let count = 0;
@@ -536,7 +521,6 @@ if (!objectivePause && !engaged) {
 const dest = objectiveFor(bot, ctx);
 const speed = ctx.now < bot.alertUntil ? 4.8 : 4.35;
 navigate(bot, dt, dest, speed);
-} else if (!objectivePause && engaged) {
 }
 animate(bot, dt, ctx);
 }
