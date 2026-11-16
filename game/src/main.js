@@ -51,6 +51,20 @@ player.state.isPlayer = true;
 player.state.name = 'YOU';
 const bots = createBotSystem(scene, map, rng);
 const match = createMatch();
+const charge = new THREE.Group();
+const chargeShell = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.16, 0.26), map.materials.dark);
+const chargeStrip = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.035, 0.035), map.materials.hazard);
+chargeShell.position.y = 0.08;
+chargeStrip.position.set(0, 0.13, -0.135);
+charge.add(chargeShell, chargeStrip);
+charge.visible = false;
+scene.add(charge);
+function syncCharge() {
+const bomb = match.state.bomb;
+charge.visible = bomb.state === 'planted' || bomb.state === 'dropped';
+charge.position.set(bomb.position.x, bomb.state === 'planted' ? 0.16 : 0, bomb.position.z);
+chargeStrip.visible = Math.sin(match.state.now * 4) > -0.4;
+}
 const hud = createHud(map);
 const input = createInput(renderer.domElement, onLockChange);
 const view = createViewModel(camera);
@@ -462,7 +476,6 @@ return;
 const bot = bots.nearestAttacker(state.attackerTeam, bomb.position, 1.3);
 if (bot) {
 match.pickup(bot);
-// A replacement carrier goes straight to the site, not back through its old spawn route.
 bot.siteId = state.attackSite ?? bot.siteId;
 bot.routeIndex = map.routes[bot.siteId][bot.slot % 3].length;
 bot.repathTimer = 0;
@@ -816,8 +829,6 @@ camera.aspect = window.innerWidth / window.innerHeight;
 camera.updateProjectionMatrix();
 renderer.setSize(window.innerWidth, window.innerHeight);
 });
-// Adaptive resolution: a weak GPU scales the picture down, never the round clock.
-// Screenshots run at full quality and never touch this.
 const quality = { scale: 1, cooldown: 0 };
 function adaptQuality(dt) {
 if (shotMode) return;
@@ -1012,15 +1023,19 @@ state.attackerTeam = 'ember';
 state.playerTeam = 'ember';
 state.playerMoney = 3150;
 state.now = 331;
-state.bomb.state = 'carried';
-state.bomb.carrier = player.state;
-state.bomb.timer = 40;
-state.bomb.plantProgress = 0.52;
+state.bomb.state = 'planted';
+state.bomb.siteId = 'B';
+state.bomb.carrier = null;
+state.bomb.position.x = 13.5;
+state.bomb.position.z = -5.5;
+state.bomb.timer = 34;
+state.bomb.plantProgress = 0;
+state.bomb.defuseProgress = 0;
 state.banner = { text: '', sub: '', time: 0 };
 state.feed = [];
-player.state.position.set(12, 0, -3);
-player.state.yaw = 0.02;
-player.state.pitch = -0.36;
+player.state.position.set(13.4, 0, 2.8);
+player.state.yaw = 0.01;
+player.state.pitch = -0.17;
 player.state.health = 88;
 player.state.armor = 100;
 player.state.helmet = true;
@@ -1040,7 +1055,18 @@ loadout.primary.mag = 19;
 loadout.primary.reserve = 90;
 view.state.lowered = false;
 playersShotBots();
-effects.smoke(new THREE.Vector3(4.6, 0.35, -5.8));
+const allies = [[11.0, -2.8, 0.1], [15.8, -3.2, -0.15]];
+for (let i = 0; i < 2; i += 1) {
+bots.roster[i].position.set(allies[i][0], 0, allies[i][1]);
+bots.roster[i].yaw = allies[i][2];
+}
+bots.roster[4].position.set(13.2, 0, -10.2);
+bots.roster[4].yaw = Math.PI + 0.08;
+bots.roster[5].position.set(10.6, 0, -6.0);
+bots.roster[5].alive = false;
+bots.roster[5].deathTimer = 1.5;
+bots.syncModels(botCtx);
+effects.smoke(new THREE.Vector3(17.6, 0.35, -8.6));
 effects.setCameraQuaternion(camera.quaternion);
 effects.update(0.24);
 syncGunHud();
@@ -1054,14 +1080,14 @@ hud.setFeed(state.feed);
 hud.setBanner(state.banner);
 hud.setObjective(objectiveText());
 hud.setCrosshair(0.006);
-hud.setInteract(true, 0.52, 'HOLD E — PLANT AT COOLANT LOOP');
+hud.setInteract(false, 0, '');
 view.update(0.016, activeGun);
 tickHud(0.016);
-hud.setInteract(true, 0.52, 'HOLD E — PLANT AT COOLANT LOOP');
+hud.setInteract(false, 0, '');
 }
 function playersShotBots() {
 bots.resetRound('ember', 'ember');
-const allies = [[5.6, 4.2, -0.6], [-6.4, 2.2, 0.5], [2.8, 10.5, 0.0], [-4.2, 12.0, 0.1]];
+const allies = [[-15.4, -1.0, -0.12], [-6.4, 2.2, 0.5], [2.8, 10.5, 0.0], [-4.2, 12.0, 0.1]];
 for (let i = 0; i < 4; i += 1) {
 const bot = bots.roster[i];
 bot.position.set(allies[i][0], 0, allies[i][1]);
@@ -1107,6 +1133,7 @@ function paintShot(times = 3) {
 let painted = 0;
 function paint() {
 requestAnimationFrame(paint);
+syncCharge();
 syncCamera();
 camera.updateMatrixWorld(true);
 renderer.render(scene, camera);
@@ -1148,7 +1175,6 @@ return;
 const look = input.takeLook();
 if (input.state.locked) player.look(look.x, look.y);
 accumulator += dt;
-// Catch up to the clamped frame time: a slow renderer slows the picture, not the clock.
 const maxSteps = Math.ceil(0.1 / FIXED_STEP);
 let steps = 0;
 while (accumulator >= FIXED_STEP && steps < maxSteps) {
@@ -1166,6 +1192,7 @@ stats.since = now;
 window.__clock = { accumulator, steps };
 adaptQuality(dt);
 tickHud(dt);
+syncCharge();
 syncCamera();
 const alpha = Math.min(1, accumulator / FIXED_STEP);
 camera.position.lerpVectors(previousPositions[0], player.state.position, alpha);

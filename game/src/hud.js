@@ -273,7 +273,6 @@ boardOpen = open;
 els.board.hidden = !open;
 }
 function refreshBoard(rows, state) {
-// Team budget includes the player and fallen members, not just survivors.
 for (const team of ['ember', 'warden']) {
 let money = 0;
 for (const row of rows) if (row.team === team) money += row.money;

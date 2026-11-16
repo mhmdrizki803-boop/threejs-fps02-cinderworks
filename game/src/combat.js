@@ -81,14 +81,12 @@ const falloff = 1 - def.falloff * drop;
 const head = part === 'head' ? def.head : 1;
 return def.damage * falloff * head;
 }
-// Helmets protect heads; body armor absorbs only as much damage as its remaining durability.
 export function armorDamage(entity, amount, part) {
 if (part === 'head') return amount * (entity.helmet ? 0.72 : 1);
 const absorbed = Math.min(amount * 0.5, Math.max(0, entity.armor) / 0.9);
 entity.armor = Math.max(0, entity.armor - absorbed * 0.9);
 return amount - absorbed;
 }
-// Shard blast fades continuously to zero at its 7.5m radius.
 export function fragDamage(distance) {
 return 120 * Math.max(0, 1 - distance / 7.5);
 }

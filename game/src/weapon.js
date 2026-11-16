@@ -53,7 +53,6 @@ restTime: 1,
 };
 return gun;
 }
-// Accuracy settles after movement; a pause restores first-shot precision and recoil.
 export function stepGun(gun, dt, speed = 0) {
 gun.cooldown = Math.max(0, gun.cooldown - dt);
 gun.bloom = Math.max(0, gun.bloom - dt * (gun.def.bloomMax > 0.03 ? 0.06 : 0.09));

@@ -8,7 +8,6 @@ const ENEMY_NAMES = ['SLATE', 'MORROW', 'VALE', 'HARROW', 'SABLE'];
 const tempDir = new THREE.Vector3();
 const tempAim = new THREE.Vector3();
 const eyePoint = new THREE.Vector3();
-// Flash afterimage widens aim, then recovers smoothly after the full blind period.
 export function botAimError(bot, distance, speed, now) {
 return bot.aimError * (0.7 + distance / 55) * (speed > 2 ? 1.5 : 1) * (bot.gun.id === 'talon' ? 1.3 : 1)
 * (1 + Math.max(0, bot.dazzledUntil - now) * 1.8);
@@ -27,17 +26,17 @@ return out;
 function makeModel() {
 const group = new THREE.Group();
 const parts = { materials: [] };
-const mat = (color, metalness = 0.25, roughness = 0.7, emissive = 0) => {
+const mat = (color, metalness = 0.25, roughness = 0.7, emissive = 0, role = 'team') => {
 const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), metalness, roughness });
 if (emissive) {
 material.emissive = new THREE.Color(color);
 material.emissiveIntensity = emissive;
 }
-parts.materials.push({ material, role: 'team' });
+parts.materials.push({ material, role });
 return material;
 };
 const dark = new THREE.MeshStandardMaterial({ color: new THREE.Color('#283238'), roughness: 0.8, metalness: 0.15 });
-const vest = new THREE.MeshStandardMaterial({ color: new THREE.Color('#3b4850'), roughness: 0.75, metalness: 0.2 });
+const vest = mat('#3b4850', 0.2, 0.75, 0, 'vest');
 const skin = new THREE.MeshStandardMaterial({ color: new THREE.Color('#a37f61'), roughness: 0.9 });
 const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.62, 0.28), vest);
 torso.position.y = 1.22;
@@ -102,6 +101,7 @@ function styleModel(bot) {
 const color = teamColor(bot.team);
 for (const entry of bot.model.parts.materials) {
 entry.material.color.set(color);
+if (entry.role === 'vest') entry.material.color.multiplyScalar(0.55);
 if (entry.material.emissive) entry.material.emissive.set(color);
 }
 }
@@ -208,7 +208,6 @@ bot.model.parts.legR.rotation.set(0, 0, 0);
 function sideOf(bot, attackerTeam) {
 return bot.team === attackerTeam ? 'attack' : 'defend';
 }
-// Loss-streak eco: save for a rifle and armor rather than force-buying every round.
 function buy(attackerTeam, lossStreak = {}) {
 for (const bot of roster) {
 bot.eco = (lossStreak[bot.team] ?? 0) >= 2 && bot.money < WEAPONS.longbow.price + 650;
@@ -242,7 +241,6 @@ let count = 0;
 for (const bot of roster) if (bot.alive && bot.team === team) count += 1;
 return count;
 }
-// Nearest live attacker coordinates recovery and uses the same eligibility as pickup.
 function nearestAttacker(team, position, range = Infinity) {
 let nearest = null;
 for (const bot of roster) {
@@ -354,7 +352,6 @@ bot.yaw += (rng() - 0.5) * 1.4;
 }
 return actual;
 }
-// Site anchors hold approaches; one attacker retrieves a dropped core while others cover.
 function objectiveFor(bot, ctx, recoverer) {
 const bomb = ctx.bomb;
 const attacking = bot.team === ctx.attackerTeam;
@@ -503,7 +500,6 @@ animate(bot, dt, ctx);
 continue;
 }
 stepGun(bot.gun, dt);
-// Flash and smoke break target lock immediately, even between perception ticks.
 if (bot.target && (bot.blindUntil > ctx.now || ctx.effects.smokeBlocks(bot.position.x, bot.position.z, bot.target.position.x, bot.target.position.z))) {
 bot.target = null;
 bot.lastSeenAt = -10;

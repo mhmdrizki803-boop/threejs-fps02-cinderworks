@@ -469,7 +469,6 @@ const NEIGHBORS = [
 [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
 [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2],
 ];
-// A* on the 1 m grid, with no diagonal corner cutting.
 function findPath(fromX, fromZ, toX, toZ) {
 const start = nearestOpen(fromX, fromZ);
 const goal = nearestOpen(toX, toZ);
