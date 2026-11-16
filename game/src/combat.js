@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-const point = new THREE.Vector3();
 const result = {
 kind: 'none', entity: null, part: 'body', point: new THREE.Vector3(), distance: 0, normal: new THREE.Vector3(), wall: false,
 };
@@ -82,6 +81,10 @@ const falloff = 1 - def.falloff * drop;
 const head = part === 'head' ? def.head : 1;
 return def.damage * falloff * head;
 }
+// Shard blast fades continuously to zero at its 7.5m radius.
+export function fragDamage(distance) {
+return 120 * Math.max(0, 1 - distance / 7.5);
+}
 const coneA = new THREE.Vector3();
 const coneB = new THREE.Vector3();
 const coneUp = new THREE.Vector3(0, 1, 0);
@@ -99,11 +102,3 @@ out.copy(direction)
 .normalize();
 return out;
 }
-export function aimDirection(from, to, out) {
-out.set(to.x - from.x, to.y - from.y, to.z - from.z);
-const length = out.length();
-if (length < 0.0001) out.set(0, 0, -1);
-else out.multiplyScalar(1 / length);
-return out;
-}
-export { point };

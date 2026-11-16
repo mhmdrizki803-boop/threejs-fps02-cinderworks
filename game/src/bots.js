@@ -8,6 +8,11 @@ const ENEMY_NAMES = ['SLATE', 'MORROW', 'VALE', 'HARROW', 'SABLE'];
 const tempDir = new THREE.Vector3();
 const tempAim = new THREE.Vector3();
 const eyePoint = new THREE.Vector3();
+// Flash afterimage widens aim, then recovers smoothly after the full blind period.
+export function botAimError(bot, distance, speed, now) {
+return bot.aimError * (0.7 + distance / 55) * (speed > 2 ? 1.5 : 1) * (bot.gun.id === 'talon' ? 1.3 : 1)
+* (1 + Math.max(0, bot.dazzledUntil - now) * 1.8);
+}
 function shortestAngle(from, to) {
 let delta = (to - from) % (Math.PI * 2);
 if (delta > Math.PI) delta -= Math.PI * 2;
@@ -133,6 +138,7 @@ lastSeen: new THREE.Vector3(),
 lastSeenAt: -10,
 alertUntil: -10,
 blindUntil: -10,
+dazzledUntil: -10,
 reactionLeft: 0,
 thinkTimer: 0,
 aimError: 0.013 + (1 - (0.5 + rng() * 0.3)) * 0.045,
@@ -175,6 +181,7 @@ bot.target = null;
 bot.lastSeenAt = -10;
 bot.alertUntil = -10;
 bot.blindUntil = -10;
+bot.dazzledUntil = -10;
 bot.reactionLeft = 0;
 bot.path = [];
 bot.pathIndex = 0;
@@ -426,7 +433,7 @@ if (!gunReady(bot.gun)) return true;
 eyePoint.set(bot.position.x, eyeY, bot.position.z);
 forwardOf(bot.yaw, bot.pitch, tempDir);
 const moving = target.velocity ? Math.hypot(target.velocity.x, target.velocity.z) : 0;
-const error = bot.aimError * (0.7 + distance / 55) * (moving > 2 ? 1.5 : 1) * (bot.gun.def.id === 'talon' ? 1.3 : 1);
+const error = botAimError(bot, distance, moving, ctx.now);
 spreadDirection(tempDir, error, rng, tempAim);
 const hit = castShot(eyePoint, tempAim, 90, bot.team, ctx.combatants, map);
 gunFire(bot.gun);
@@ -503,6 +510,12 @@ animate(bot, dt, ctx);
 continue;
 }
 stepGun(bot.gun, dt);
+// Flash and smoke break target lock immediately, even between perception ticks.
+if (bot.target && (bot.blindUntil > ctx.now || ctx.effects.smokeBlocks(bot.position.x, bot.position.z, bot.target.position.x, bot.target.position.z))) {
+bot.target = null;
+bot.lastSeenAt = -10;
+bot.alertUntil = ctx.now;
+}
 bot.thinkTimer -= dt;
 if (bot.thinkTimer <= 0) {
 bot.thinkTimer = 0.11 + rng() * 0.07;

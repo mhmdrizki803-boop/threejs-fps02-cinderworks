@@ -1,7 +1,7 @@
 # Harness taktik
 
 Harness browser untuk ekonomi bot, payout ronde, papan skor, anchor site,
-recovery core, serta plant/defuse fisik.
+recovery core, plant/defuse fisik, granat, perception, serta integrasi tembak.
 
 ## Menjalankan
 
@@ -58,6 +58,8 @@ Output sementara milik tes dibersihkan setelah selesai.
   dan input kosong. Runner juga memulihkan `botCtx.combatants` ke
   `[player.state, ...bots.roster]`, referensi player/bomb/roster, `now` ke
   `match.state.now`, serta `attackerTeam` ke tim attacker saat ini.
+  API/callback asli juga dipulihkan sebelum restart, sehingga override
+  `effects`, audio, callback damage/noise, atau method tidak bocor antar-kasus.
   Fixture pembelian berada di bawah harga Talon agar pilihan senjata acak
   tidak memengaruhi hasil.
 - Route `/src/main.js` membaca langsung `game/src/main.js` dan menambahkan
@@ -102,9 +104,8 @@ tercatat sambil menjalankan kasus berikutnya; timeout menghentikan rangkaian.
 
 ## Step 2: bukti navigasi dan objective
 
-Ekspektasi eksekusi normal: **205 asersi baseline ekonomi + 143 asersi baru =
-348 asersi**, dalam **32 kasus**. Jumlah ini merupakan harapan; hasil runtime
-dicetak oleh harness saat dijalankan.
+Baseline sampai step 2: **205 asersi ekonomi + 143 asersi navigasi = 348 asersi**,
+dalam **32 kasus**. Kasus-kasus ini tetap menjadi bagian dari harness.
 
 | Cakupan baru | Kasus | Asersi |
 | --- | ---: | ---: |
@@ -146,6 +147,59 @@ Metode deterministik:
   lain. Progress setelah 120 tick harus 0.4 dengan kit atau 0.2 tanpa kit;
   penyelesaian memerlukan 5/10 detik penuh, dengan toleransi satu tick.
 
+## Step 3: granat, perception, dan tembakan aktual
+
+Ekspektasi eksekusi normal: **348 asersi baseline + 83 asersi baru = 431 asersi**,
+dalam **44 kasus**. Jumlah ini adalah harapan, bukan klaim kelulusan runtime.
+
+| Cakupan baru | Kasus | Asersi |
+| --- | ---: | ---: |
+| Kurva `fragDamage`, body center 3D, tepi radius/elevasi, dan perlindungan wall | 3 | 17 |
+| Factory/reset afterimage, faktor gun/moving, penurunan linear dan baseline tepat di akhir | 1 | 7 |
+| Flash pop: facing/jarak/dead/wall; immediate blind; engage nyata membaca afterimage | 3 | 28 |
+| Smoke radius/life nyata, immediate lock break, reacquire dan reaction delay | 1 | 12 |
+| Acquire melalui map LOS dan engage setelah target terlihat | 1 | 5 |
+| Input firing/locked/panel HUD → `simulationStep` → shoot/raycast/damage/HUD aktual | 1 | 9 |
+| Pemulihan override pada exception dan guard sebelum restart berikutnya | 2 | 5 |
+
+Fixture dan bukti:
+
+- Modul `/src/combat.js`, `/src/bots.js`, dan `/src/weapon.js` dimuat lewat
+  dynamic import browser; import map halaman menangani `three`.
+- Pop selalu memakai `throwGrenade(type)` nyata. Mesh granat pertama dipasang
+  pada koordinat fixture, velocity dibuat nol dan fuse nol, kemudian
+  `updateGrenades(0)` dijalankan. Setiap pop memeriksa stok, owner/scene,
+  antrean akhir kosong, pelepasan mesh, serta event disposal geometry/material.
+- Granat tetap memakai combatants main yang tertutup atas player + roster.
+  Fixture hanya mengubah entitas tersebut, dengan health200 dan armor0 agar
+  damage parsial tidak memicu kematian/payout. Untuk frag, pusat `(0,0.88,8)`
+  menghasilkan jarak body 0 / 3.75 / 7.5; actor pada elevasi10 membuktikan jarak
+  3D. Wall dari `(-12,-4)` ke `(-8,-4)` diuji bersama kontrol pada sisi ledakan,
+  dan kedua body berada di luar collider.
+- Flash dekat memakai offset `(0.6,0.8)` di area terbuka. Blind berlangsung
+  4.5 detik pada jarak dekat atau 2.8 detik pada jarak jauh, lalu diikuti
+  afterimage2.5 detik. Bot pada jarak `<5.5` menerima flash periferal meski
+  membelakangi; bot membelakangi pada jarak `>=5.5`, bot mati, di luar
+  jangkauan, atau di balik wall harus mempertahankan timer bersih.
+- Tes engage memakai bot dan player aktual. Full blind diuji dengan target
+  lama dan `thinkTimer=60`; mag serta callback tembak tetap nol. Setelah blind,
+  acquire memakai reaction delay normal. Getter observasi `dazzledUntil`
+  meneruskan baca/tulis nilai asli dan memeriksa stack `botAimError` dari
+  `engage` saat tembakan; tracer/audio tetap memanggil method game asli.
+- Smoke memakai cloud nyata pada `(0,0.35,8)`, radius2.45 dan life13. Ray pada
+  offset x=2.44 memblokir; x=2.45/2.46 tidak. Cloud masih memblokir setelah
+  `effects.update(12.9)` dan dihapus setelah tambahan0.2 detik. Perception
+  memakai pasangan body bebas collider `(2,12)` / `(-2,4)` dan reaction delay
+  diuji sesudah cloud hilang.
+- Gunplay memakai event mousedown/mouseup pada handler input game dan fixture
+  `input.state.locked`. Gate unlocked/buy/board harus menjaga ammo; setelah
+  gate terbuka, `simulationStep(1/60)` menjalankan shoot/raycast/applyDamage
+  aktual dan memperbarui ammo HUD. Shot mode menghilangkan spread player agar
+  satu hit body Longbow bernilai34 secara deterministik.
+- Tes AI membandingkan ammo, callback/tracer, reaction, dan faktor aim;
+  tidak menggunakan statistik hit-rate. Wrapper observasi selalu meneruskan
+  panggilan ke implementasi asli dan dipulihkan dalam `finally`.
+
 ## Menambah pengujian bot, granat, atau gunplay
 
 Tambahkan `test('Nama kasus', async (page) => { ... })` sebelum `main()`.
@@ -159,8 +213,19 @@ Di `page.evaluate`, gunakan `window.testGame` untuk API permainan dan
   kemudian menyinkronkan gun bot.
 - `restoreBotContext()`: memulihkan semua referensi perception, tim, dan clock
   yang dipakai fixture. Panggil setelah restart tambahan di dalam kasus.
+- `restoreAPIs()` / `withAPIs(callback)`: memulihkan descriptor API game dan
+  konteks. Wrapper mendukung callback async serta pemulihan pada exception;
+  runner memakai baseline API sebelum setiap restart.
+- `APIsOriginal()`: memeriksa identitas method/callback dan referensi
+  effects/audio terhadap baseline.
 - `isolateBots()`: menyinkronkan konteks, mengosongkan combatants, membuka fase
   live, dan membersihkan input untuk pengujian bot tanpa lawan terlihat.
+- `prepareEffects()` / `perceptionPair(from,to,now)`: fixture entitas aktual
+  health200/armor0 dan pasangan bot-player untuk pengujian perception tanpa
+  tembakan bot lain; body pair divalidasi terhadap collider.
+- `popGrenade(type,point)`: throw/pop nyata dengan snapshot stok dan disposal.
+- `observeCombat()`: wrapper pass-through untuk damage, audio shot, dan tracer;
+  gunakan di dalam `withAPIs`.
 - `bots()`, `balances()`, `match()`: snapshot scalar untuk assertion Node.
 - `actor(bot)`, `bomb()`: snapshot posisi, role/interaction, route/repath,
   carrier, defuser, serta progress objective.

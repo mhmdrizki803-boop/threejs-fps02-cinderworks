@@ -12,7 +12,7 @@ import {
 createGun, stepGun, gunReady, gunFire, gunReload, gunSpread, gunRefill,
 createViewModel, BUY_LIST,
 } from './weapon.js';
-import { castShot, damageFor, spreadDirection } from './combat.js';
+import { castShot, damageFor, fragDamage, spreadDirection } from './combat.js';
 const FIXED_STEP = 1 / 60;
 const GRENADE_DEFS = {
 frag: { name: 'SHARD', fuse: 1.85, color: PALETTE.hazard, speed: 15, up: 3.4 },
@@ -329,9 +329,9 @@ effects.explosion(position);
 if (!shotMode) audio.explode();
 for (const entity of combatants) {
 if (!entity.alive) continue;
-const distance = Math.hypot(entity.position.x - position.x, entity.position.z - position.z);
-if (distance > 7.5) continue;
-applyDamage(entity, 12 + 120 * (1 - distance / 7.5), 'body', grenade.owner === entity ? null : grenade.owner, { name: GRENADE_DEFS.frag.name });
+const distance = Math.hypot(entity.position.x - position.x, entity.position.y + (entity.height ?? 1.76) * 0.5 - position.y, entity.position.z - position.z);
+if (distance >= 7.5 || !map.lineOfSight(position.x, position.z, entity.position.x, entity.position.z)) continue;
+applyDamage(entity, fragDamage(distance), 'body', grenade.owner === entity ? null : grenade.owner, { name: GRENADE_DEFS.frag.name });
 }
 } else if (grenade.type === 'flash') {
 effects.flashBurst(position);
@@ -349,6 +349,7 @@ const dz = position.z - bot.position.z;
 const facing = (-Math.sin(bot.yaw) * dx - Math.cos(bot.yaw) * dz) / (distance || 1);
 if (facing > 0.05 || distance < 5.5) {
 bot.blindUntil = Math.max(bot.blindUntil, match.state.now + (distance < 6 ? 4.5 : 2.8));
+bot.dazzledUntil = Math.max(bot.dazzledUntil, bot.blindUntil + 2.5);
 }
 }
 } else {

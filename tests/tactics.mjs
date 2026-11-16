@@ -123,11 +123,39 @@ async function installHelpers(page) {
     const g = window.testGame;
     const teams = ['ember', 'warden'];
     const { createMover } = await import('/src/physics.js');
+    const [combatModule, botModule, weaponModule] = await Promise.all([
+      import('/src/combat.js'), import('/src/bots.js'), import('/src/weapon.js'),
+    ]);
     const mover = createMover(g.map.colliders);
     const dt = 1 / 60;
     const position = (bot) => ({ x: bot.position.x, y: bot.position.y, z: bot.position.z });
+    const apiObjects = [g, g.bots, g.match, g.player, g.input, g.hud, g.map, g.effects, g.botCtx.audio];
+    const snapshotAPIs = () => ({
+      context: Object.getOwnPropertyDescriptors(g.botCtx),
+      objects: apiObjects.map((object) => ({ object, descriptors: Object.getOwnPropertyDescriptors(object) })),
+    });
+    const originalAPIs = snapshotAPIs();
     window.tactics = {
+      modules: { combat: combatModule, bots: botModule, weapon: weaponModule },
+      restoreAPIs(snapshot = originalAPIs) {
+        for (const { object, descriptors } of snapshot.objects) Object.defineProperties(object, descriptors);
+        Object.defineProperties(g.botCtx, snapshot.context);
+      },
+      async withAPIs(run) {
+        const saved = snapshotAPIs();
+        try { return await run(); } finally { this.restoreAPIs(saved); }
+      },
+      APIsOriginal() {
+        const methods = originalAPIs.objects.every(({ object, descriptors }) =>
+          Object.entries(descriptors).filter(([, descriptor]) => typeof descriptor.value === 'function')
+            .every(([key, descriptor]) => object[key] === descriptor.value));
+        const context = Object.entries(originalAPIs.context)
+          .filter(([key, descriptor]) => typeof descriptor.value === 'function' || key === 'effects' || key === 'audio')
+          .every(([key, descriptor]) => g.botCtx[key] === descriptor.value);
+        return methods && context;
+      },
       restoreBotContext() {
+        this.restoreAPIs();
         Object.assign(g.botCtx, {
           bots: g.bots.roster, player: g.player.state,
           combatants: [g.player.state, ...g.bots.roster], bomb: g.match.state.bomb,
@@ -141,6 +169,88 @@ async function installHelpers(page) {
         g.input.state.keys.clear();
         g.hud.setBuyOpen(false);
         g.hud.setBoardOpen(false);
+      },
+      setTime(now) {
+        g.match.state.now = g.botCtx.now = now;
+      },
+      prepareEffects() {
+        this.isolateBots();
+        Object.assign(g.player.state, { health: 200, armor: 0, helmet: false, alive: true, height: 1.76 });
+        g.player.state.position.set(-20, 0, 16);
+        g.player.state.velocity.set(0, 0, 0);
+        for (const bot of g.bots.roster) {
+          Object.assign(bot, { health: 200, armor: 0, helmet: false, alive: true, height: 1.76 });
+          bot.position.set(-20, 0, 8);
+        }
+      },
+      perceptionPair(from, to, now = 20) {
+        this.prepareEffects();
+        const bot = g.bots.roster.find((entity) => entity.team !== g.player.state.team && !entity.anchor);
+        for (const entity of g.bots.roster) entity.alive = entity === bot;
+        bot.position.set(from.x, from.y ?? 0, from.z);
+        g.player.state.position.set(to.x, to.y ?? 0, to.z);
+        if (this.blocked(bot.position.x, bot.position.z, bot)
+          || this.blocked(g.player.state.position.x, g.player.state.position.z, g.player.state)) {
+          throw new Error('Body fixture perception berada di dalam collider');
+        }
+        bot.gun = weaponModule.createGun('kestrel');
+        Object.assign(bot, { aimError: 0.03, reaction: 0.3, reactionLeft: 0, target: null,
+          thinkTimer: 0, burstPause: 0, burstLeft: 0, strafeTimer: 60, strafeDir: 1 });
+        const dx = to.x - from.x;
+        const dz = to.z - from.z;
+        bot.yaw = Math.atan2(-dx, -dz);
+        bot.pitch = Math.atan2(g.player.state.position.y + g.player.state.height * 0.62
+          - (bot.position.y + 1.5), Math.hypot(dx, dz));
+        this.setTime(now);
+        g.botCtx.combatants = [bot, g.player.state];
+        return { bot, target: g.player.state };
+      },
+      lockBot(bot, target) {
+        bot.target = target;
+        bot.lastSeen.copy(target.position);
+        bot.lastSeenAt = g.botCtx.now;
+        bot.alertUntil = g.botCtx.now + 60;
+        bot.thinkTimer = 60;
+        bot.reactionLeft = 0;
+      },
+      observeCombat() {
+        const calls = { damage: [], shots: [], tracers: [] };
+        const damage = g.botCtx.onDamage;
+        const shot = g.botCtx.audio.shot;
+        const tracer = g.botCtx.effects.spawnTracer;
+        g.botCtx.onDamage = (...args) => {
+          calls.damage.push({ target: args[0] === g.player.state ? 'YOU' : args[0].id, amount: args[1] });
+          return damage(...args);
+        };
+        g.botCtx.audio.shot = function (...args) {
+          calls.shots.push(args[0]);
+          return shot.apply(this, args);
+        };
+        g.botCtx.effects.spawnTracer = function (from, to, ...args) {
+          calls.tracers.push({ from: { x: from.x, y: from.y, z: from.z }, to: { x: to.x, y: to.y, z: to.z } });
+          return tracer.call(this, from, to, ...args);
+        };
+        return calls;
+      },
+      popGrenade(type, point) {
+        if (g.grenades.length !== 0) throw new Error('Fixture pop memerlukan antrean granat kosong');
+        g.loadout.grenades[type] = 1;
+        g.throwGrenade(type);
+        const grenade = g.grenades[0];
+        if (!grenade) throw new Error(`throwGrenade(${type}) tidak menghasilkan granat`);
+        const spawned = { count: g.grenades.length, type: grenade.type,
+          ownerPlayer: grenade.owner === g.player.state, inventory: g.loadout.grenades[type],
+          attached: grenade.mesh.parent === g.scene };
+        let geometryDisposed = false;
+        let materialDisposed = false;
+        grenade.mesh.geometry.addEventListener('dispose', () => { geometryDisposed = true; });
+        grenade.mesh.material.addEventListener('dispose', () => { materialDisposed = true; });
+        grenade.mesh.position.set(point.x, point.y, point.z);
+        grenade.velocity.set(0, 0, 0);
+        grenade.fuse = 0;
+        g.updateGrenades(0);
+        return { spawned, cleanup: { count: g.grenades.length, detached: grenade.mesh.parent === null,
+          geometryDisposed, materialDisposed } };
       },
       blocked(x, z, bot) {
         return Boolean(mover.overlaps(x, (bot?.position.y ?? 0) + 0.05, z,
@@ -1168,6 +1278,469 @@ for (const scenario of [
   }, scenario.side);
 }
 
+function expectPop(pop, type) {
+  equal(`throwGrenade(${type}) membuat granat nyata dan memakai stok`, pop.spawned,
+    { count: 1, type, ownerPlayer: true, inventory: 0, attached: true });
+  equal(`Pop ${type} membersihkan antrean, mesh, dan resource`, pop.cleanup,
+    { count: 0, detached: true, geometryDisposed: true, materialDisposed: true });
+}
+
+test('Kurva frag kontinu sampai radius 7.5', async (page) => {
+  const result = await page.evaluate(() => {
+    const damage = window.tactics.modules.combat.fragDamage;
+    return { samples: [0, 1.875, 3.75, 5.625, 7.5, 15].map(damage),
+      inside: damage(7.5 - 1e-6), outside: damage(7.5 + 1e-6) };
+  });
+  equal('Damage frag pada jarak kontrak', result.samples, [120, 90, 60, 30, 0, 0]);
+  equal('Damage mendekati nol tanpa lonjakan di tepi radius', result.inside > 0 && result.inside < 0.001
+    && result.outside === 0, true, result);
+});
+
+test('Frag pop memakai pusat body 3D dan applyDamage nyata', async (page) => {
+  const result = await page.evaluate(() => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    t.prepareEffects();
+    const targets = g.bots.roster.filter((bot) => bot.team !== g.player.state.team).slice(0, 4);
+    [[0, 0, 8], [3.75, 0, 8], [7.5, 0, 8], [0, 10, 8]]
+      .forEach((point, index) => targets[index].position.set(...point));
+    const balances = t.balances();
+    const calls = [];
+    const damage = g.bots.damage;
+    g.bots.damage = function (bot, amount, part) {
+      calls.push({ id: bot.id, amount, part });
+      return damage.call(this, bot, amount, part);
+    };
+    const pop = t.popGrenade('frag', { x: 0, y: 0.88, z: 8 });
+    return {
+      pop, ids: targets.map((bot) => bot.id), health: targets.map((bot) => bot.health), calls,
+      distances: targets.map((bot) => Math.hypot(bot.position.x,
+        bot.position.y + bot.height * 0.5 - 0.88, bot.position.z - 8)),
+      clear: targets.every((bot) => !t.blocked(bot.position.x, bot.position.z, bot)),
+      perceptionCount: g.botCtx.combatants.length,
+      unchanged: { alive: g.player.state.alive && g.bots.roster.every((bot) => bot.alive),
+        feed: g.match.state.feed.length, scores: { ...g.match.state.scores },
+        wallet: JSON.stringify(t.balances()) === JSON.stringify(balances) },
+    };
+  }));
+  expectPop(result.pop, 'frag');
+  equal('Damage 120/60, tepi radius dan elevasi tidak kena', result.health, [80, 140, 200, 200]);
+  equal('Hanya dua body menerima applyDamage', result.calls,
+    [{ id: result.ids[0], amount: 120, part: 'body' }, { id: result.ids[1], amount: 60, part: 'body' }]);
+  equal('Jarak diukur dari body center termasuk elevasi', result.distances, [0, 3.75, 7.5, 10]);
+  equal('Body fixture berada di ruang bebas collider', result.clear, true);
+  equal('Granat tetap memakai combatants main saat perception kosong', result.perceptionCount, 0);
+  equal('Damage parsial tidak memicu kematian atau payout', result.unchanged,
+    { alive: true, feed: 0, scores: { ember: 0, warden: 0 }, wallet: true });
+});
+
+test('Frag tidak menembus dinding dalam radius', async (page) => {
+  const result = await page.evaluate(() => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    t.prepareEffects();
+    const [blocked, control] = g.bots.roster.filter((bot) => bot.team !== g.player.state.team);
+    blocked.position.set(-8, 0, -4);
+    control.position.set(-12, 0, -2);
+    const geometry = { distance: Math.hypot(blocked.position.x + 12,
+      blocked.position.y + blocked.height * 0.5 - 0.88, blocked.position.z + 4),
+      sight: g.map.lineOfSight(-12, -4, -8, -4),
+      sourceClear: !t.blocked(-12, -4), targetClear: !t.blocked(-8, -4, blocked),
+      controlClear: !t.blocked(-12, -2, control) };
+    const calls = [];
+    const damage = g.bots.damage;
+    g.bots.damage = function (bot, amount, part) {
+      calls.push(bot.id);
+      return damage.call(this, bot, amount, part);
+    };
+    const balances = t.balances();
+    const pop = t.popGrenade('frag', { x: -12, y: 0.88, z: -4 });
+    return { pop, geometry, blockedHealth: blocked.health, controlDamage: 200 - control.health,
+      calls, controlId: control.id, unchanged: JSON.stringify(t.balances()) === JSON.stringify(balances)
+        && g.match.state.phase === 'live' && g.match.state.feed.length === 0 };
+  }));
+  expectPop(result.pop, 'frag');
+  equal('Wall x=-10 benar-benar memisahkan body yang valid', result.geometry,
+    { distance: 4, sight: false, sourceClear: true, targetClear: true, controlClear: true });
+  equal('Target di balik wall tetap health200', result.blockedHealth, 200);
+  equal('Kontrol pada sisi ledakan menerima damage88', Math.abs(result.controlDamage - 88) < 1e-9,
+    true, result.controlDamage);
+  equal('applyDamage hanya mencapai kontrol tanpa wall', result.calls, [result.controlId]);
+  equal('Blast terlindung wall tidak menghasilkan payout', result.unchanged, true);
+});
+
+test('Afterimage dibuat/reset dan faktor aim pulih kontinu', async (page) => {
+  const result = await page.evaluate(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const scene = new g.scene.constructor();
+    let created;
+    try {
+      const standalone = t.modules.bots.createBotSystem(scene, g.map, () => 0.5);
+      created = standalone.roster.map((bot) => ({ blind: bot.blindUntil, dazzled: bot.dazzledUntil }));
+    } finally {
+      scene.traverse((object) => {
+        object.geometry?.dispose();
+        if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose());
+        else object.material?.dispose();
+      });
+      scene.clear();
+    }
+    for (const bot of g.bots.roster) { bot.blindUntil = 40; bot.dazzledUntil = 50; }
+    g.bots.resetRound(g.match.state.attackerTeam, g.player.state.team, g.match.state.attackSite);
+    const reset = g.bots.roster.map((bot) => ({ blind: bot.blindUntil, dazzled: bot.dazzledUntil }));
+    const aim = t.modules.bots.botAimError;
+    const fixture = { aimError: 0.03, gun: t.modules.weapon.createGun('longbow'), dazzledUntil: 12.5 };
+    const baseline = 0.03 * (0.7 + 55 / 55);
+    const gunFactors = ['kestrel', 'rattler', 'longbow', 'talon'].map((id) => {
+      const bot = { ...fixture, gun: t.modules.weapon.createGun(id) };
+      return { id, still: aim(bot, 55, 0, 12.5), speed2: aim(bot, 55, 2, 12.5), moving: aim(bot, 55, 3, 12.5) };
+    });
+    const times = [10, 10.5, 11, 11.5, 12, 12.5, 13];
+    const samples = times.map((now) => aim(fixture, 55, 0, now));
+    return { created, reset, gunFactors, baseline, samples,
+      edge: { before: aim(fixture, 55, 0, 12.5 - 1e-7), at: aim(fixture, 55, 0, 12.5),
+        after: aim(fixture, 55, 0, 12.5 + 1e-7) } };
+  });
+  const clean = Array.from({ length: 9 }, () => ({ blind: -10, dazzled: -10 }));
+  equal('Factory bot menginisialisasi blind dan afterimage', result.created, clean);
+  equal('resetRound menghapus blind dan afterimage lama', result.reset, clean);
+  const baseline = 0.03 * (0.7 + 55 / 55);
+  equal('Gun/moving factor kembali ke baseline tepat di akhir', result.gunFactors,
+    ['kestrel', 'rattler', 'longbow', 'talon'].map((id) => ({ id, still: baseline * (id === 'talon' ? 1.3 : 1),
+      speed2: baseline * (id === 'talon' ? 1.3 : 1), moving: baseline * 1.5 * (id === 'talon' ? 1.3 : 1) })));
+  const ratios = result.samples.map((value) => value / baseline);
+  equal('Faktor afterimage turun linear', ratios.every((value, index) =>
+    Math.abs(value - [5.5, 4.6, 3.7, 2.8, 1.9, 1, 1][index]) < 1e-10), true, ratios);
+  equal('Error menurun ketat selama recovery', result.samples.slice(0, 5)
+    .every((value, index) => value > result.samples[index + 1]), true);
+  equal('Akhir dan sesudah recovery sama persis baseline', result.samples.slice(-2), [baseline, baseline]);
+  equal('Tidak ada diskontinuitas pada akhir afterimage', result.edge.before > baseline
+    && result.edge.before - baseline < 1e-7 && result.edge.at === baseline && result.edge.after === baseline,
+  true, result.edge);
+});
+
+test('Flash pop menghormati facing, jarak, dan bot mati', async (page) => {
+  const result = await page.evaluate(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    t.prepareEffects();
+    t.setTime(20);
+    const actors = g.bots.roster.slice(0, 6);
+    const points = [[0.6, 8.8], [6, 16], [-6, 16], [0.8, 8.6], [-20, 8], [-0.6, 8.8]];
+    points.forEach(([x, z], index) => {
+      actors[index].position.set(x, 0, z);
+      actors[index].yaw = Math.atan2(x, z - 8) + (index === 2 || index === 5 ? Math.PI : 0);
+    });
+    actors[3].alive = false;
+    const geometry = actors.every((bot) => !t.blocked(bot.position.x, bot.position.z, bot)
+      && g.map.lineOfSight(0, 8, bot.position.x, bot.position.z));
+    const pop = t.popGrenade('flash', { x: 0, y: 1, z: 8 });
+    return { pop, geometry, statuses: actors.map((bot) => ({ blind: bot.blindUntil, dazzled: bot.dazzledUntil })),
+      health: actors.map((bot) => bot.health) };
+  });
+  expectPop(result.pop, 'flash');
+  equal('Semua fixture flash berada di area terbuka', result.geometry, true);
+  equal('Facing dekat menerima blind4.5 dan afterimage2.5', result.statuses[0], { blind: 24.5, dazzled: 27 });
+  equal('Facing jauh menerima blind2.8 dan afterimage2.5', result.statuses[1], { blind: 22.8, dazzled: 25.3 });
+  equal('Bot jauh yang membelakangi flash tidak dibutakan', result.statuses[2], { blind: -10, dazzled: -10 });
+  equal('Bot mati tidak menerima flash', result.statuses[3], { blind: -10, dazzled: -10 });
+  equal('Bot di luar jangkauan tidak menerima flash', result.statuses[4], { blind: -10, dazzled: -10 });
+  equal('Bot dekat menerima flash periferal meski membelakangi', result.statuses[5], { blind: 24.5, dazzled: 27 });
+  equal('Flash tidak mengubah health', result.health, Array(6).fill(200));
+});
+
+test('Flash pop tidak menembus wall', async (page) => {
+  const result = await page.evaluate(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    t.prepareEffects();
+    t.setTime(20);
+    const [blocked, control] = g.bots.roster;
+    blocked.position.set(-8, 0, -4);
+    blocked.yaw = Math.PI / 2;
+    control.position.set(-12, 0, -2);
+    control.yaw = 0;
+    const geometry = { blockedLOS: g.map.lineOfSight(-12, -4, -8, -4),
+      clearBodies: !t.blocked(-12, -4) && !t.blocked(-8, -4, blocked) && !t.blocked(-12, -2, control) };
+    const pop = t.popGrenade('flash', { x: -12, y: 1, z: -4 });
+    return { pop, geometry, blocked: { blind: blocked.blindUntil, dazzled: blocked.dazzledUntil },
+      control: { blind: control.blindUntil, dazzled: control.dazzledUntil }, health: [blocked.health, control.health] };
+  });
+  expectPop(result.pop, 'flash');
+  equal('Wall memisahkan dua body collision-free', result.geometry, { blockedLOS: false, clearBodies: true });
+  equal('Kontrol facing pada sisi flash menerima blind', result.control, { blind: 24.5, dazzled: 27 });
+  equal('Facing tidak mengalahkan perlindungan wall', result.blocked, { blind: -10, dazzled: -10 });
+  equal('Kontrol dan target terlindung tetap health200', result.health, [200, 200]);
+});
+
+test('Flash memutus lock segera, lalu engage nyata memakai afterimage', async (page) => {
+  const result = await page.evaluate(() => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const { bot, target } = t.perceptionPair({ x: 0.6, z: 8.8 }, { x: 0.6, z: 14.8 });
+    t.lockBot(bot, target);
+    bot.yaw = Math.atan2(0.6, 0.8);
+    const before = { target: bot.target === target, think: bot.thinkTimer, mag: bot.gun.mag };
+    const calls = t.observeCombat();
+    const pop = t.popGrenade('flash', { x: 0, y: 1, z: 8 });
+    const timers = { blind: bot.blindUntil, dazzled: bot.dazzledUntil };
+    t.botTick();
+    const immediate = { target: bot.target === null, lastSeenAt: bot.lastSeenAt,
+      alertCurrent: bot.alertUntil === g.botCtx.now, betweenThinkTicks: bot.thinkTimer > 59,
+      mag: bot.gun.mag, shots: calls.shots.length, tracers: calls.tracers.length, damage: calls.damage.length };
+    t.setTime(bot.blindUntil - 0.5);
+    bot.thinkTimer = 0;
+    t.botTick();
+    const whileBlind = { target: bot.target === null, mag: bot.gun.mag };
+    const aim = t.modules.bots.botAimError;
+    const baseline = 0.03 * (0.7 + 55 / 55);
+    const curve = [bot.blindUntil, bot.blindUntil + 1.25, bot.dazzledUntil].map((now) => aim(bot, 55, 0, now));
+    t.setTime(bot.blindUntil + 0.25);
+    bot.thinkTimer = 0;
+    t.botTick();
+    const reacquired = { target: bot.target === target, reaction: bot.reactionLeft > 0,
+      mag: bot.gun.mag, shots: calls.shots.length };
+    const descriptor = Object.getOwnPropertyDescriptor(bot, 'dazzledUntil');
+    const dazzledUntil = bot.dazzledUntil;
+    let liveDeadline = dazzledUntil;
+    const reads = [];
+    let during;
+    let ended;
+    try {
+      Object.defineProperty(bot, 'dazzledUntil', { configurable: true, enumerable: descriptor.enumerable,
+        get() {
+          const stack = new Error().stack ?? '';
+          reads.push({ now: g.botCtx.now, aim: stack.includes('botAimError'), engage: stack.includes('engage') });
+          return liveDeadline;
+        },
+        set(value) { liveDeadline = value; },
+      });
+      t.advanceBots(60, { until: () => bot.gun.mag < 15 });
+      const actualReads = [...reads];
+      during = { mag: bot.gun.mag, spreadRead: actualReads.some((read) => read.now < dazzledUntil && read.aim && read.engage),
+        shots: calls.shots.length, tracers: calls.tracers.length,
+        wider: aim(bot, 55, 0, g.botCtx.now) > baseline };
+      const shots = calls.shots.length;
+      const tracers = calls.tracers.length;
+      reads.length = 0;
+      t.setTime(dazzledUntil);
+      Object.assign(bot.gun, { cooldown: 0, reloadLeft: 0 });
+      Object.assign(bot, { burstPause: 0, reactionLeft: 0, thinkTimer: 60 });
+      t.botTick();
+      const endReads = [...reads];
+      ended = { mag: bot.gun.mag, spreadRead: endReads.some((read) => read.aim && read.engage),
+        shots: calls.shots.length - shots, tracers: calls.tracers.length - tracers,
+        baseline: aim(bot, 55, 0, g.botCtx.now) === baseline };
+    } finally {
+      Object.defineProperty(bot, 'dazzledUntil', { ...descriptor, value: liveDeadline });
+    }
+    return { pop, before, timers, immediate, whileBlind, curve, baseline, reacquired, during, ended,
+      alive: target.alive && bot.alive && g.match.state.phase === 'live' && g.match.state.feed.length === 0 };
+  }));
+  expectPop(result.pop, 'flash');
+  equal('Timer flash nyata sesuai kontrak dekat', result.timers, { blind: 24.5, dazzled: 27 });
+  equal('Flash mengenai bot yang sudah lock di antara think ticks', result.before, { target: true, think: 60, mag: 15 });
+  equal('Full blind langsung menghapus lock/memori dan melarang firing', result.immediate,
+    { target: true, lastSeenAt: -10, alertCurrent: true, betweenThinkTicks: true, mag: 15, shots: 0, tracers: 0, damage: 0 });
+  equal('Perception tick selama full blind tidak dapat acquire', result.whileBlind, { target: true, mag: 15 });
+  equal('Pop nyata menghasilkan kurva recovery linear', result.curve.every((value, index) =>
+    Math.abs(value / result.baseline - [5.5, 3.25, 1][index]) < 1e-10), true, result.curve);
+  equal('Error aktual kembali persis baseline pada akhir', result.curve[2], result.baseline);
+  equal('Setelah full blind, acquire tetap memiliki reaction delay', result.reacquired,
+    { target: true, reaction: true, mag: 15, shots: 0 });
+  equal('Engage menembak dengan membaca afterimage aktual', result.during,
+    { mag: 14, spreadRead: true, shots: 1, tracers: 1, wider: true });
+  equal('Engage di akhir recovery menembak pada baseline', result.ended,
+    { mag: 13, spreadRead: true, shots: 1, tracers: 1, baseline: true });
+  equal('Dua tembakan observasi tetap parsial tanpa payout', result.alive, true);
+});
+
+test('Smoke nyata memutus lock sebelum think dan hilang setelah life13', async (page) => {
+  const result = await page.evaluate(() => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const { bot, target } = t.perceptionPair({ x: 2, z: 12 }, { x: -2, z: 4 });
+    const calls = t.observeCombat();
+    t.lockBot(bot, target);
+    const before = { target: bot.target === target, think: bot.thinkTimer };
+    const clearBefore = g.effects.smokeBlocks(bot.position.x, bot.position.z, target.position.x, target.position.z);
+    const children = new Set(g.scene.children);
+    const pop = t.popGrenade('smoke', { x: 0, y: 1, z: 8 });
+    const cloud = g.scene.children.find((object) => !children.has(object) && object.type === 'Group');
+    const radius = [g.effects.smokeBlocks(bot.position.x, bot.position.z, target.position.x, target.position.z),
+      g.effects.smokeBlocks(2.44, 4, 2.44, 12),
+      g.effects.smokeBlocks(2.45, 4, 2.45, 12), g.effects.smokeBlocks(2.46, 4, 2.46, 12)];
+    t.botTick();
+    const immediate = { target: bot.target === null, lastSeenAt: bot.lastSeenAt,
+      alertCurrent: bot.alertUntil === g.botCtx.now, betweenThinkTicks: bot.thinkTimer > 59,
+      mag: bot.gun.mag, shots: calls.shots.length, health: target.health };
+    g.effects.update(12.9);
+    const stillBlocking = g.effects.smokeBlocks(bot.position.x, bot.position.z, target.position.x, target.position.z);
+    g.effects.update(0.2);
+    const expired = g.effects.smokeBlocks(bot.position.x, bot.position.z, target.position.x, target.position.z);
+    const removed = Boolean(cloud && cloud.parent === null);
+    t.setTime(g.botCtx.now + 13.1);
+    bot.thinkTimer = 0;
+    t.botTick();
+    const reacquired = { target: bot.target === target, reaction: bot.reactionLeft > 0,
+      mag: bot.gun.mag, shots: calls.shots.length };
+    t.advanceBots(60, { until: () => bot.gun.mag < 15 });
+    return { pop, clearBefore, radius, before, immediate, stillBlocking, expired, removed, reacquired,
+      shot: { mag: bot.gun.mag, shots: calls.shots.length, tracers: calls.tracers.length },
+      safe: target.alive && bot.alive && g.match.state.phase === 'live' && g.match.state.feed.length === 0 };
+  }));
+  expectPop(result.pop, 'smoke');
+  equal('LOS sebelum pop tidak terhalang smoke', result.clearBefore, false);
+  equal('Smoke radius2.45 memakai batas yang ketat', result.radius, [true, true, false, false]);
+  equal('Fixture memiliki lock aktif dan thinkTimer60', result.before, { target: true, think: 60 });
+  equal('Smoke segera menghapus lock/memori tanpa menunggu 0.18 detik', result.immediate,
+    { target: true, lastSeenAt: -10, alertCurrent: true, betweenThinkTicks: true, mag: 15, shots: 0, health: 200 });
+  equal('Smoke masih memblokir pada life12.9', result.stillBlocking, true);
+  equal('Smoke tidak memblokir setelah total13.1 detik', result.expired, false);
+  equal('Group cloud benar-benar dihapus dari scene', result.removed, true);
+  equal('Acquire setelah smoke memakai reaction delay normal', result.reacquired,
+    { target: true, reaction: true, mag: 15, shots: 0 });
+  equal('Bot menembak lagi hanya sesudah reaction', result.shot, { mag: 14, shots: 1, tracers: 1 });
+  equal('Perception test tidak menghasilkan kematian atau payout', result.safe, true);
+});
+
+test('Acquire dijaga map LOS, lalu pulih pada sisi wall yang sama', async (page) => {
+  const result = await page.evaluate(() => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const { bot, target } = t.perceptionPair({ x: -12, z: -4 }, { x: -8, z: -4 });
+    const calls = t.observeCombat();
+    const geometry = { sight: g.map.lineOfSight(-12, -4, -8, -4),
+      clear: !t.blocked(-12, -4, bot) && !t.blocked(-8, -4, target) };
+    const before = { target: bot.target === null, think: bot.thinkTimer };
+    t.botTick();
+    const blocked = { target: bot.target === null, mag: bot.gun.mag, shots: calls.shots.length };
+    target.position.set(-12, 0, 0);
+    bot.thinkTimer = 0;
+    t.botTick();
+    const visible = { target: bot.target === target, reaction: bot.reactionLeft > 0,
+      sight: g.map.lineOfSight(bot.position.x, bot.position.z, target.position.x, target.position.z), mag: bot.gun.mag };
+    t.advanceBots(60, { until: () => bot.gun.mag < 15 });
+    return { geometry, before, blocked, visible,
+      fired: { mag: bot.gun.mag, shots: calls.shots.length, tracers: calls.tracers.length, alive: target.alive } };
+  }));
+  equal('Wall fixture bukan body di dalam collider', result.geometry, { sight: false, clear: true });
+  equal('Acquire diuji dari target kosong pada think tick', result.before, { target: true, think: 0 });
+  equal('Bot tidak acquire/firing melewati wall', result.blocked, { target: true, mag: 15, shots: 0 });
+  equal('Target terlihat di sisi yang sama mendapat reaction delay', result.visible,
+    { target: true, reaction: true, sight: true, mag: 15 });
+  equal('LOS yang benar memungkinkan engage nyata', result.fired, { mag: 14, shots: 1, tracers: 1, alive: true });
+});
+
+test('Input locked dan panel HUD menjaga shoot nyata setelah flash', async (page) => {
+  const result = await page.evaluate(() => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    t.prepareEffects();
+    g.match.state.phase = 'buy';
+    g.match.state.playerMoney = 3350;
+    g.buyItem('longbow');
+    g.match.state.phase = 'live';
+    const target = g.bots.roster.find((bot) => bot.team !== g.player.state.team);
+    target.position.set(0.6, 0, 8.8);
+    target.yaw = Math.atan2(0.6, 0.8);
+    g.player.state.position.set(0.6, 0, 14.8);
+    const gun = g.loadout.primary;
+    const pop = t.popGrenade('flash', { x: 0, y: 1, z: 8 });
+    const armed = { primary: g.loadout.primaryId, mag: gun.mag, flashed: target.blindUntil > g.match.state.now };
+    const snapshot = () => ({ mag: gun.mag, health: target.health });
+    let input;
+    const blocked = [];
+    let shot;
+    let hud;
+    let released;
+    try {
+      window.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
+      input = g.input.state.firing;
+      g.input.state.locked = false;
+      t.step(1);
+      blocked.push(snapshot());
+      g.input.state.locked = true;
+      g.hud.setBuyOpen(true);
+      t.step(1);
+      blocked.push(snapshot());
+      g.hud.setBuyOpen(false);
+      g.hud.setBoardOpen(true);
+      t.step(1);
+      blocked.push(snapshot());
+      g.hud.setBoardOpen(false);
+      const dx = target.position.x - g.player.state.position.x;
+      const dz = target.position.z - g.player.state.position.z;
+      g.player.state.yaw = Math.atan2(-dx, -dz);
+      g.player.state.pitch = Math.atan2(target.position.y + target.height * 0.5
+        - (g.player.state.position.y + g.player.state.eye), Math.hypot(dx, dz));
+      t.step(1);
+      shot = snapshot();
+      hud = { mag: g.hud.els.mag.textContent, reserve: g.hud.els.reserve.textContent };
+      window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+      t.step(1);
+      released = { firing: g.input.state.firing, ...snapshot() };
+    } finally {
+      window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+      g.input.state.locked = false;
+      g.input.clearPressed();
+    }
+    return { pop, armed, input, blocked, shot, hud, released,
+      safe: target.alive && g.player.state.alive && g.match.state.feed.length === 0 && g.grenades.length === 0 };
+  }));
+  expectPop(result.pop, 'flash');
+  equal('Buy/equip nyata memberi rifle dan flash mengenai target', result.armed, { primary: 'longbow', mag: 30, flashed: true });
+  equal('Event mousedown nyata mengaktifkan firing input', result.input, true);
+  equal('Unlocked, buy panel, dan board panel memblokir shoot', result.blocked,
+    Array.from({ length: 3 }, () => ({ mag: 30, health: 200 })));
+  equal('simulationStep memanggil shoot dan applyDamage body nyata', result.shot, { mag: 29, health: 166 });
+  equal('Ammo HUD mengikuti tembakan nyata', result.hud, { mag: '29', reserve: '/ 90' });
+  equal('Mouseup menghentikan firing tanpa tembakan tambahan', result.released, { firing: false, mag: 29, health: 166 });
+  equal('Gunplay parsial tetap hidup dengan antrean granat kosong', result.safe, true);
+});
+
+test('Wrapper fixture memulihkan API meski callback melempar', async (page) => {
+  const result = await page.evaluate(async () => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const original = { damage: g.botCtx.onDamage, noise: g.botCtx.noise,
+      effects: g.botCtx.effects, audio: g.botCtx.audio, step: g.bots.step, clear: g.effects.clear };
+    let changed;
+    let caught;
+    try {
+      await t.withAPIs(() => {
+        g.botCtx.onDamage = (...args) => original.damage(...args);
+        g.botCtx.noise = (...args) => original.noise(...args);
+        g.botCtx.effects = { ...original.effects };
+        g.botCtx.audio = { ...original.audio };
+        g.bots.step = (...args) => original.step(...args);
+        g.effects.clear = (...args) => original.clear(...args);
+        changed = g.botCtx.onDamage !== original.damage && g.botCtx.effects !== original.effects
+          && g.botCtx.audio !== original.audio && g.bots.step !== original.step && g.effects.clear !== original.clear;
+        throw new Error('EXPECTED_FIXTURE_ERROR');
+      });
+    } catch (error) { caught = error.message; }
+    const restored = t.APIsOriginal();
+    // Sengaja meninggalkan wrapper pass-through untuk menguji guard runner kasus berikutnya.
+    g.botCtx.onDamage = (...args) => original.damage(...args);
+    g.botCtx.effects = { ...original.effects };
+    g.botCtx.audio = { ...original.audio };
+    g.bots.step = (...args) => original.step(...args);
+    g.effects.clear = (...args) => original.clear(...args);
+    return { changed, caught, restored, leftDirty: !t.APIsOriginal() };
+  });
+  equal('Fixture benar-benar mengganti callback, effects, audio, dan method', result.changed, true);
+  equal('Jalur exception fixture benar-benar dijalankan', result.caught, 'EXPECTED_FIXTURE_ERROR');
+  equal('finally memulihkan API asli setelah exception', result.restored, true);
+  equal('Wrapper residu tersedia untuk regresi runner berikutnya', result.leftDirty, true);
+});
+
+test('Runner mengembalikan override API sebelum restart berikutnya', async (page) => {
+  const restored = await page.evaluate(() => window.tactics.APIsOriginal());
+  equal('Callback, effects/audio, dan semua method kembali asli', restored, true);
+});
+
 async function main() {
   let server;
   let browser;
@@ -1241,6 +1814,7 @@ async function main() {
         await timed((async () => {
           await page.evaluate((side) => {
             const g = window.testGame;
+            window.tactics.restoreAPIs();
             g.input.state.keys.clear();
             g.input.state.firing = false;
             g.input.state.locked = false;
