@@ -125,9 +125,6 @@ item.mesh.material.opacity = 0.5;
 item.mesh.scale.setScalar(1);
 item.mesh.visible = true;
 }
-function muzzle(point) {
-spawnSparkBurst(point, new THREE.Vector3(0, 0.2, 1), PALETTE.hazard, 2, 2);
-}
 function explosion(point) {
 spawnSparkBurst(point, new THREE.Vector3(0, 1, 0), PALETTE.hazard, 18, 8);
 for (let i = 0; i < 6; i += 1) {
@@ -271,5 +268,5 @@ for (const item of cloud.puffs) item.mesh.material.dispose();
 }
 smokeClouds.length = 0;
 }
-return { spawnTracer, impact, blood, muzzle, explosion, flashBurst, smoke, smokeBlocks, update, setCameraQuaternion, clear, freeze };
+return { spawnTracer, impact, blood, explosion, flashBurst, smoke, smokeBlocks, update, setCameraQuaternion, clear, freeze };
 }

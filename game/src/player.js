@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createMover } from './physics.js';
+import { armorDamage } from './combat.js';
 const RADIUS = 0.34;
 const STAND_HEIGHT = 1.76;
 const CROUCH_HEIGHT = 1.14;
@@ -128,13 +129,7 @@ state.team = team;
 }
 function damage(amount, part) {
 if (!state.alive) return { killed: false, health: 0 };
-let damage = amount;
-if (part === 'head' && state.helmet) damage *= 0.72;
-if (state.armor > 0) {
-const absorbed = damage * 0.5;
-state.armor = Math.max(0, state.armor - absorbed * 0.9);
-damage -= absorbed;
-}
+const damage = armorDamage(state, amount, part);
 state.health = Math.max(0, state.health - damage);
 if (state.health === 0) {
 state.alive = false;

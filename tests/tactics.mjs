@@ -18,9 +18,22 @@ const EXPOSE_MAIN = `
 ;window.testGame = {
   map, bots, match, player, input, loadout, botCtx, matchCtx, hud, rowsForBoard,
   pickupBombIfDropped, updateObjective, simulationStep, restartMatch, buyItem,
-  shoot, applyDamage, grenades, updateGrenades, effects, scene, throwGrenade
+  shoot, applyDamage, grenades, updateGrenades, effects, scene, throwGrenade,
+  pistol, tickHud, switchSlot,
+  setShotMode(value) { shotMode = value; }
 };
 `;
+
+// Instrumentasi hanya pada respons HTTP: boot menu tetap membekukan RAF physics.
+function instrumentMain(source) {
+  let declarations = 0;
+  const instrumented = source.replace(/^([ \t]*)const([ \t]+shotMode[ \t]*=)/gm, (_, indent, binding) => {
+    declarations += 1;
+    return `${indent}let${binding}`;
+  });
+  if (declarations !== 1) throw new Error(`Shim shotMode membutuhkan satu deklarasi; ditemukan ${declarations}`);
+  return instrumented + EXPOSE_MAIN;
+}
 
 const cases = [];
 const counts = { assertions: 0, passed: 0, failed: 0, cases: 0 };
@@ -53,6 +66,11 @@ function equal(label, actual, expected, detail) {
 
 function failure(label, error) {
   equal(label, error instanceof Error ? error.message : String(error), null);
+}
+
+function near(label, actual, expected, tolerance = 1e-9) {
+  equal(label, Number.isFinite(actual) && Math.abs(actual - expected) <= tolerance, true,
+    { aktual: actual, harapan: expected, toleransi: tolerance });
 }
 
 async function timed(promise, milliseconds, label) {
@@ -182,6 +200,39 @@ async function installHelpers(page) {
           Object.assign(bot, { health: 200, armor: 0, helmet: false, alive: true, height: 1.76 });
           bot.position.set(-20, 0, 8);
         }
+      },
+      prepareWeapons(id = 'longbow') {
+        this.prepareEffects();
+        g.match.state.phase = 'buy';
+        g.match.state.playerMoney = weaponModule.WEAPONS[id].price;
+        g.buyItem(id);
+        g.match.state.phase = 'live';
+        g.player.state.position.set(0, 0, 18.5);
+        g.player.state.velocity.set(0, 0, 0);
+        g.player.state.yaw = 0;
+        g.player.state.pitch = 0.8;
+        g.input.state.locked = true;
+        g.input.state.firing = false;
+        return g.loadout.primary;
+      },
+      gun(gun) {
+        return { id: gun.id, mag: gun.mag, reserve: gun.reserve,
+          cooldown: gun.cooldown, reloadLeft: gun.reloadLeft, bloom: gun.bloom,
+          shotIndex: gun.shotIndex, movement: gun.movement, restTime: gun.restTime };
+      },
+      observeMovement(gun) {
+        const descriptor = Object.getOwnPropertyDescriptor(gun, 'movement');
+        let movement = gun.movement;
+        const reads = [];
+        Object.defineProperty(gun, 'movement', { configurable: true, enumerable: descriptor.enumerable,
+          get() {
+            const stack = new Error().stack ?? '';
+            reads.push({ spread: stack.includes('gunSpread'), shoot: stack.includes('shoot'), hud: stack.includes('tickHud') });
+            return movement;
+          },
+          set(value) { movement = value; },
+        });
+        return { reads, restore() { Object.defineProperty(gun, 'movement', { ...descriptor, value: movement }); } };
       },
       perceptionPair(from, to, now = 20) {
         this.prepareEffects();
@@ -1741,6 +1792,561 @@ test('Runner mengembalikan override API sebelum restart berikutnya', async (page
   equal('Callback, effects/audio, dan semua method kembali asli', restored, true);
 });
 
+test('Gun factory dan refill memulihkan seluruh state senjata', async (page) => {
+  const rows = await page.evaluate(() => {
+    const t = window.tactics;
+    const w = t.modules.weapon;
+    return ['kestrel', 'rattler', 'longbow', 'talon'].map((id) => {
+      const gun = w.createGun(id);
+      const initial = t.gun(gun);
+      Object.assign(gun, { mag: 0, reserve: 1, cooldown: 0.8, reloadLeft: 1.1,
+        bloom: gun.def.bloomMax, shotIndex: 4, movement: 0.8, restTime: 0.04 });
+      w.gunRefill(gun);
+      return { id, initial, refilled: t.gun(gun) };
+    });
+  });
+  const capacities = { kestrel: [15, 60], rattler: [30, 90], longbow: [30, 90], talon: [5, 20] };
+  for (const row of rows) {
+    const [mag, reserve] = capacities[row.id];
+    const clean = { id: row.id, mag, reserve, cooldown: 0, reloadLeft: 0, bloom: 0,
+      shotIndex: 0, movement: 0, restTime: 1 };
+    equal(`createGun ${row.id} memiliki state awal lengkap`, row.initial, clean);
+    equal(`gunRefill ${row.id} memulihkan ammo, recoil, dan recovery`, row.refilled, clean);
+  }
+});
+
+test('stepGun menyimpan movement dan menjaga timer cooldown/reload', async (page) => {
+  const result = await page.evaluate(() => {
+    const t = window.tactics;
+    const w = t.modules.weapon;
+    const gun = w.createGun('longbow');
+    const movement = [];
+    for (const [dt, speed] of [[0.1, 5.15], [0.1, 0], [0.1, 2.575], [0.1, -5.15], [1, 0], [0, 515]]) {
+      w.stepGun(gun, dt, speed);
+      movement.push(gun.movement);
+    }
+    const defaultGun = w.createGun('kestrel');
+    Object.assign(defaultGun, { movement: 1, restTime: 0, cooldown: 1, reloadLeft: 2 });
+    w.stepGun(defaultGun, 0.1);
+    const defaultStep = t.gun(defaultGun);
+    w.stepGun(defaultGun, 1);
+    const capped = t.gun(defaultGun);
+    const negative = w.createGun('longbow');
+    w.stepGun(negative, 0, -515);
+    return { movement, defaultStep, capped, negative: negative.movement };
+  });
+  equal('Movement mengambil max speed clamp dan decay3.5', result.movement.every((value, index) =>
+    Math.abs(value - [1, 0.65, 0.5, 0.15, 0, 1][index]) < 1e-9), true, result.movement);
+  near('Argumen speed default0 meluruhkan movement', result.defaultStep.movement, 0.65);
+  near('restTime maju sebesar dt', result.defaultStep.restTime, 0.1);
+  near('Cooldown berkurang sebesar dt', result.defaultStep.cooldown, 0.9);
+  near('Reload berkurang sebesar dt', result.defaultStep.reloadLeft, 1.9);
+  equal('Timer/decay berhenti pada batasnya', {
+    movement: result.capped.movement, restTime: result.capped.restTime, cooldown: result.capped.cooldown,
+  }, { movement: 0, restTime: 1, cooldown: 0 });
+  equal('Speed negatif tidak memberi movement negatif', result.negative, 0);
+});
+
+test('gunSpread menggabungkan first shot, crouch, speed, memory, dan bloom', async (page) => {
+  const rows = await page.evaluate(() => {
+    const w = window.tactics.modules.weapon;
+    return ['kestrel', 'rattler', 'longbow', 'talon'].map((id) => {
+      const gun = w.createGun(id);
+      const values = [w.gunSpread(gun, 0, false), w.gunSpread(gun, 0, true)];
+      gun.movement = 0.5;
+      values.push(w.gunSpread(gun, 0, false));
+      gun.movement = 0;
+      values.push(w.gunSpread(gun, 2.575, false));
+      gun.shotIndex = 2;
+      gun.bloom = 0.01;
+      values.push(w.gunSpread(gun, 0, false));
+      values.push(w.gunSpread(gun, 515, true));
+      return { id, values };
+    });
+  });
+  const spreads = { kestrel: [0.0032, 0.034], rattler: [0.0045, 0.062],
+    longbow: [0.0014, 0.075], talon: [0.0007, 0.11] };
+  for (const row of rows) {
+    const [still, moving] = spreads[row.id];
+    const expected = [still * 0.55, still * 0.62 * 0.55,
+      still * 0.775 + moving * 0.5, still * 0.775 + moving * 0.5,
+      still + 0.01, still * 0.62 + moving + 0.01];
+    equal(`Spread ${row.id} memenuhi seluruh faktor numerik`, row.values.every((value, index) =>
+      Math.abs(value - expected[index]) < 1e-9), true, { aktual: row.values, harapan: expected });
+  }
+});
+
+test('Recoil cadence pendek bertahan, pause dan Talon memulihkan pola pertama', async (page) => {
+  const result = await page.evaluate(() => {
+    const t = window.tactics;
+    const w = t.modules.weapon;
+    const bursts = ['kestrel', 'rattler', 'longbow'].map((id) => {
+      const gun = w.createGun(id);
+      const kicks = [];
+      const indices = [];
+      const rests = [];
+      for (let shot = 0; shot < 4; shot += 1) {
+        if (shot) w.stepGun(gun, gun.def.fireGap);
+        kicks.push([...w.gunFire(gun)]);
+        indices.push(gun.shotIndex);
+        rests.push(gun.restTime);
+      }
+      const mag = gun.mag;
+      w.stepGun(gun, 0.3);
+      const paused = { shotIndex: gun.shotIndex, bloom: gun.bloom, restTime: gun.restTime };
+      const firstAgain = [...w.gunFire(gun)];
+      return { id, kicks, expectedKicks: gun.def.pattern.slice(0, 4), indices, rests, mag,
+        capacity: gun.def.mag, paused, firstAgain, firstPattern: [...gun.def.pattern[0]] };
+    });
+    const guard = w.createGun('longbow');
+    Object.assign(guard, { shotIndex: 3, restTime: 0, bloom: 0.04 });
+    w.stepGun(guard, 0.3);
+    const bloomGuard = { shotIndex: guard.shotIndex, rested: guard.restTime >= 0.3, bloomPositive: guard.bloom > 0 };
+    w.stepGun(guard, 0.4);
+    const bloomCleared = { shotIndex: guard.shotIndex, bloom: guard.bloom };
+    const talon = w.createGun('talon');
+    w.gunFire(talon);
+    const gap = talon.cooldown;
+    w.stepGun(talon, 0.3);
+    const early = { gap, blocked: w.gunFire(talon), mag: talon.mag, waiting: !w.gunReady(talon) };
+    w.stepGun(talon, 0.95);
+    const recovered = t.gun(talon);
+    const nextKick = [...w.gunFire(talon)];
+    return { bursts, bloomGuard, bloomCleared, early, recovered, nextKick, firstTalon: [...talon.def.pattern[0]] };
+  });
+  for (const burst of result.bursts) {
+    equal(`Cadence ${burst.id} mengikuti empat pola recoil`, burst.kicks, burst.expectedKicks);
+    equal(`gunFire ${burst.id} tidak mereset index tiap shot`, {
+      indices: burst.indices, rests: burst.rests, mag: burst.mag,
+    }, { indices: [1, 2, 3, 4], rests: [0, 0, 0, 0], mag: burst.capacity - 4 });
+    equal(`Pause ${burst.id} mengembalikan pola pertama`, {
+      paused: burst.paused, kick: burst.firstAgain,
+    }, { paused: { shotIndex: 0, bloom: 0, restTime: 0.3 }, kick: burst.firstPattern });
+  }
+  equal('Rest0.3 tidak cukup selama bloom masih positif', result.bloomGuard,
+    { shotIndex: 3, rested: true, bloomPositive: true });
+  equal('Rest dan bloom0 bersama memulihkan index0', result.bloomCleared, { shotIndex: 0, bloom: 0 });
+  equal('Gap Talon tetap1.25 dan shot terlalu dini ditolak', result.early,
+    { gap: 1.25, blocked: false, mag: 4, waiting: true });
+  equal('Talon pulih alami selama gap panjang', {
+    cooldown: result.recovered.cooldown, restTime: result.recovered.restTime,
+    bloom: result.recovered.bloom, shotIndex: result.recovered.shotIndex, kick: result.nextKick,
+  }, { cooldown: 0, restTime: 1, bloom: 0, shotIndex: 0, kick: result.firstTalon });
+});
+
+test('KeyW nyata dan berhenti mempertahankan penalty pada pistol serta primary', async (page) => {
+  const result = await page.evaluate(() => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const primary = t.prepareWeapons();
+    const pistol = g.pistol;
+    g.switchSlot('pistol');
+    const startZ = g.player.state.position.z;
+    let moving;
+    let stopped;
+    let switched;
+    let recovered;
+    try {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
+      const keyRegistered = g.input.state.keys.has('KeyW');
+      t.step(30);
+      moving = { keyRegistered, speed: Math.hypot(g.player.state.velocity.x, g.player.state.velocity.z),
+        distance: startZ - g.player.state.position.z, primary: t.gun(primary), pistol: t.gun(pistol) };
+      window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' }));
+      t.step(1);
+      stopped = { speed: Math.hypot(g.player.state.velocity.x, g.player.state.velocity.z),
+        primary: t.gun(primary), pistol: t.gun(pistol) };
+      g.switchSlot('primary');
+      switched = { slot: g.loadout.slot, samePrimary: g.loadout.primary === primary, samePistol: g.pistol === pistol,
+        primary: t.gun(primary), pistol: t.gun(pistol) };
+      t.step(120);
+      recovered = { primary: t.gun(primary), pistol: t.gun(pistol),
+        primarySpread: t.modules.weapon.gunSpread(primary, 0, false),
+        pistolSpread: t.modules.weapon.gunSpread(pistol, 0, false),
+        botMovement: g.bots.roster.map((bot) => bot.gun.movement) };
+    } finally {
+      window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' }));
+      g.input.clearPressed();
+    }
+    return { moving, stopped, switched, recovered };
+  }));
+  equal('Event KeyW menggerakkan player secara fisik', result.moving.keyRegistered
+    && result.moving.distance > 1 && result.moving.speed > 4.9, true,
+  { jarak: result.moving.distance, speed: result.moving.speed });
+  equal('Kedua senjata menyimpan penalty saat berlari', result.moving.primary.movement > 0.9
+    && result.moving.pistol.movement > 0.9, true);
+  near('Primary dan pistol menerima speed horizontal yang sama', result.moving.primary.movement, result.moving.pistol.movement);
+  equal('Stop tidak menghapus movement seketika', result.stopped.primary.movement > result.stopped.speed / 5.15
+    && result.stopped.pistol.movement > result.stopped.speed / 5.15, true, result.stopped);
+  near('Primary decay sekali per tick setelah stop', result.stopped.primary.movement, result.moving.primary.movement - 3.5 / 60);
+  near('Pistol decay sekali per tick setelah stop', result.stopped.pistol.movement, result.moving.pistol.movement - 3.5 / 60);
+  equal('Switch tidak mengganti gun atau menghapus penalty', result.switched,
+    { slot: 'primary', samePrimary: true, samePistol: true, primary: result.stopped.primary, pistol: result.stopped.pistol });
+  near('Primary pulih setelah player berhenti', result.recovered.primary.movement, 0);
+  near('Pistol nonaktif juga pulih setelah berhenti', result.recovered.pistol.movement, 0);
+  equal('Kedua senjata kembali rested dan index0', {
+    primary: [result.recovered.primary.restTime, result.recovered.primary.shotIndex],
+    pistol: [result.recovered.pistol.restTime, result.recovered.pistol.shotIndex],
+  }, { primary: [1, 0], pistol: [1, 0] });
+  near('Primary mendapatkan first-shot precision setelah recovery', result.recovered.primarySpread, 0.0014 * 0.55);
+  near('Pistol mendapatkan first-shot precision setelah recovery', result.recovered.pistolSpread, 0.0032 * 0.55);
+  equal('stepGun bot tetap memakai default speed0', result.recovered.botMovement, Array(9).fill(0));
+});
+
+test('Equip, reload nonaktif, cooldown, ammo, dan refill ronde memakai API nyata', async (page) => {
+  const result = await page.evaluate(() => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const primary = t.prepareWeapons();
+    const pistol = g.pistol;
+    let fired;
+    let reloading;
+    let pistolShot;
+    let blocked;
+    let middle;
+    let finished;
+    let equipped;
+    let roundRefill;
+    try {
+      window.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
+      t.step(1);
+      window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+      fired = t.gun(primary);
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyR' }));
+      t.step(1);
+      window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyR' }));
+      reloading = t.gun(primary);
+      g.switchSlot('pistol');
+      window.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
+      t.step(1);
+      window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+      pistolShot = t.gun(pistol);
+      g.shoot();
+      blocked = t.gun(pistol);
+      t.step(30);
+      middle = t.gun(primary);
+      t.step(150);
+      finished = { primary: t.gun(primary), pistol: t.gun(pistol) };
+      g.switchSlot('primary');
+      equipped = { slot: g.loadout.slot, same: g.loadout.primary === primary,
+        name: g.hud.els.wpn.textContent, mag: g.hud.els.mag.textContent, reserve: g.hud.els.reserve.textContent };
+      for (const gun of [pistol, primary]) Object.assign(gun, { movement: 0.7, restTime: 0.1, bloom: 0.01, shotIndex: 4 });
+      Object.assign(g.match.state, { phase: 'roundEnd', phaseTimer: 5, round: 2 });
+      g.match.step(5, g.matchCtx);
+      t.restoreBotContext();
+      roundRefill = { primary: t.gun(primary), pistol: t.gun(pistol), same: g.loadout.primary === primary,
+        phase: g.match.state.phase, round: g.match.state.round };
+    } finally {
+      window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyR' }));
+      g.input.clearPressed();
+    }
+    return { fired, reloading, pistolShot, blocked, middle, finished, equipped, roundRefill };
+  }));
+  equal('Main menembak satu primary round', { mag: result.fired.mag, reserve: result.fired.reserve, index: result.fired.shotIndex },
+    { mag: 29, reserve: 90, index: 1 });
+  near('Cooldown pasca-frame menghitung dt setelah gunFire', result.fired.cooldown, 0.098 - 1 / 60);
+  near('Bloom pasca-frame menghitung decay setelah gunFire', result.fired.bloom, 0.0028 - 0.06 / 60);
+  near('restTime pasca-frame bukan nol gunFire mentah', result.fired.restTime, 1 / 60);
+  near('KeyR memulai reload2.35 dengan satu tick berjalan', result.reloading.reloadLeft, 2.35 - 1 / 60);
+  equal('Pistol dapat menembak saat primary reload nonaktif', { mag: result.pistolShot.mag, reserve: result.pistolShot.reserve },
+    { mag: 14, reserve: 60 });
+  equal('Cooldown aktif menolak shoot kedua tanpa mengubah gun', result.blocked, result.pistolShot);
+  near('Reload primary nonaktif maju sekali setiap tick', result.middle.reloadLeft, 2.35 - 32 / 60);
+  equal('Ammo belum dipindahkan pada pertengahan reload', { mag: result.middle.mag, reserve: result.middle.reserve },
+    { mag: 29, reserve: 90 });
+  equal('Reload selesai tanpa mengubah ammo pistol', {
+    primary: [result.finished.primary.mag, result.finished.primary.reserve, result.finished.primary.reloadLeft],
+    pistol: [result.finished.pistol.mag, result.finished.pistol.reserve],
+  }, { primary: [30, 89, 0], pistol: [14, 60] });
+  equal('Equip kembali mempertahankan instance dan menyinkronkan HUD', result.equipped,
+    { slot: 'primary', same: true, name: 'LONGBOW', mag: '30', reserve: '/ 89' });
+  equal('prepareRound mengisi ulang kedua gun yang sama', {
+    same: result.roundRefill.same, phase: result.roundRefill.phase, round: result.roundRefill.round,
+    primary: [result.roundRefill.primary.mag, result.roundRefill.primary.reserve, result.roundRefill.primary.movement,
+      result.roundRefill.primary.restTime, result.roundRefill.primary.bloom, result.roundRefill.primary.shotIndex],
+    pistol: [result.roundRefill.pistol.mag, result.roundRefill.pistol.reserve, result.roundRefill.pistol.movement,
+      result.roundRefill.pistol.restTime, result.roundRefill.pistol.bloom, result.roundRefill.pistol.shotIndex],
+  }, { same: true, phase: 'buy', round: 3, primary: [30, 90, 0, 1, 0, 0], pistol: [15, 60, 0, 1, 0, 0] });
+});
+
+test('Reload parsial menjaga reserve dan tidak dapat membuat ammo negatif', async (page) => {
+  const result = await page.evaluate(() => {
+    const t = window.tactics;
+    const w = t.modules.weapon;
+    const empty = w.createGun('rattler');
+    empty.mag = empty.reserve = 0;
+    const noAmmo = { reload: w.gunReload(empty), fire: w.gunFire(empty), mag: empty.mag, reserve: empty.reserve };
+    const gun = w.createGun('rattler');
+    gun.mag = 1;
+    gun.reserve = 3;
+    const started = w.gunReload(gun);
+    const blocked = { reload: w.gunReload(gun), fire: w.gunFire(gun), mag: gun.mag, reserve: gun.reserve };
+    w.stepGun(gun, 2.04);
+    const pending = { mag: gun.mag, reserve: gun.reserve, reloading: gun.reloadLeft > 0 };
+    w.stepGun(gun, 0.02);
+    const loaded = { mag: gun.mag, reserve: gun.reserve, reloadLeft: gun.reloadLeft, ready: w.gunReady(gun) };
+    const noReserve = w.gunReload(gun);
+    let fired = 0;
+    for (let shot = 0; shot < 4; shot += 1) {
+      if (shot) w.stepGun(gun, gun.def.fireGap);
+      fired += Number(Boolean(w.gunFire(gun)));
+    }
+    w.stepGun(gun, gun.def.fireGap);
+    const extra = w.gunFire(gun);
+    return { noAmmo, started, blocked, pending, loaded, noReserve,
+      end: { fired, extra, mag: gun.mag, reserve: gun.reserve } };
+  });
+  equal('Gun tanpa magazine/reserve tidak reload atau fire', result.noAmmo, { reload: false, fire: false, mag: 0, reserve: 0 });
+  equal('Reload partial dimulai melalui gunReload', result.started, true);
+  equal('Reload ulang dan shot saat reload ditolak', result.blocked, { reload: false, fire: false, mag: 1, reserve: 3 });
+  equal('Reload tidak memindahkan ammo sebelum durasi selesai', result.pending, { mag: 1, reserve: 3, reloading: true });
+  equal('Reload memakai hanya tiga reserve yang tersedia', result.loaded, { mag: 4, reserve: 0, reloadLeft: 0, ready: true });
+  equal('Reserve habis tidak dapat reload lagi', result.noReserve, false);
+  equal('Ammo parsial habis tepat setelah empat shot', result.end, { fired: 4, extra: false, mag: 0, reserve: 0 });
+});
+
+test('Auto input burst mempertahankan recoil lalu memulihkan first shot', async (page) => {
+  const result = await page.evaluate(() => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const gun = t.prepareWeapons();
+    const shots = [];
+    let paused;
+    let resumed;
+    try {
+      window.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
+      for (let tick = 1; tick <= 18; tick += 1) {
+        const mag = gun.mag;
+        const pitch = g.player.state.pitch;
+        t.step(1);
+        if (gun.mag < mag) shots.push({ tick, index: gun.shotIndex, kick: g.player.state.pitch - pitch });
+      }
+      window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+      const burst = t.gun(gun);
+      t.step(20);
+      paused = t.gun(gun);
+      const pitch = g.player.state.pitch;
+      window.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
+      t.step(1);
+      window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+      resumed = { gun: t.gun(gun), kick: g.player.state.pitch - pitch };
+      return { shots, burst, paused, resumed };
+    } finally {
+      window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+      g.input.clearPressed();
+    }
+  }));
+  equal('Cadence main menembak pada tick1/7/13', result.shots.map((shot) => shot.tick), [1, 7, 13]);
+  equal('Recoil index main tetap naik saat auto', result.shots.map((shot) => shot.index), [1, 2, 3]);
+  equal('Tiga kick memakai tiga pattern pertama', result.shots.every((shot, index) =>
+    Math.abs(shot.kick - [-0.007, -0.010, -0.013][index]) < 1e-9), true, result.shots);
+  equal('Burst pendek tidak reset meski total durasi0.3', {
+    mag: result.burst.mag, index: result.burst.shotIndex, shortRest: result.burst.restTime < 0.3,
+  }, { mag: 27, index: 3, shortRest: true });
+  equal('Pause dengan bloom0 mengembalikan index0', { index: result.paused.shotIndex, bloom: result.paused.bloom },
+    { index: 0, bloom: 0 });
+  equal('Shot setelah pause memakai index pertama kembali', {
+    mag: result.resumed.gun.mag, index: result.resumed.gun.shotIndex,
+  }, { mag: 26, index: 1 });
+  near('Recoil setelah pause kembali ke kick pertama', result.resumed.kick, -0.007);
+});
+
+test('Shim normal branch memakai gunSpread nyata untuk shoot dan HUD', async (page) => {
+  const result = await page.evaluate(() => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const gun = t.prepareWeapons();
+    Object.assign(gun, { movement: 0.4, bloom: 0.006, shotIndex: 0 });
+    const probe = t.observeMovement(gun);
+    const gap = () => g.hud.els.crosshair.style.getPropertyValue('--gap');
+    try {
+      g.tickHud(0);
+      const menu = { gap: gap(), spreadReads: probe.reads.filter((read) => read.spread).length };
+      g.setShotMode(null);
+      probe.reads.length = 0;
+      g.tickHud(0);
+      const standing = { gap: gap(), fromHUD: probe.reads.some((read) => read.spread && read.hud) };
+      g.player.state.crouching = true;
+      g.tickHud(0);
+      const crouched = gap();
+      probe.reads.length = 0;
+      g.shoot();
+      const shotReads = [...probe.reads];
+      const fired = t.gun(gun);
+      g.tickHud(0);
+      return { menu, standing, crouched, fired,
+        shootSpread: shotReads.some((read) => read.spread && read.shoot), afterShot: gap(),
+        alive: g.player.state.alive && g.bots.roster.every((bot) => bot.alive) && g.match.state.feed.length === 0 };
+    } finally {
+      probe.restore();
+      g.setShotMode('menu');
+      g.player.state.crouching = false;
+    }
+  }));
+  const gap = (spread) => `${Math.max(4, Math.min(34, 4 + spread * 340)).toFixed(1)}px`;
+  equal('Shot-menu memakai HUD fixture tanpa membaca spread', result.menu, { gap: gap(0.0025), spreadReads: 0 });
+  equal('Mode normal memanggil gunSpread dari tickHud', result.standing.fromHUD, true);
+  equal('Crosshair normal memakai memory dan first-shot bonus', result.standing.gap,
+    gap(0.0014 * 0.73 + 0.4 * 0.075 + 0.006));
+  equal('Crosshair crouched memakai stance0.62', result.crouched,
+    gap(0.0014 * 0.62 * 0.73 + 0.4 * 0.075 + 0.006));
+  equal('Shoot normal benar-benar membaca gunSpread', result.shootSpread, true);
+  equal('Shot normal memakai ammo/index/rest yang nyata', {
+    mag: result.fired.mag, index: result.fired.shotIndex, restTime: result.fired.restTime,
+  }, { mag: 29, index: 1, restTime: 0 });
+  near('Bloom shot mentah naik sesuai def', result.fired.bloom, 0.006 + 0.0028);
+  equal('HUD pasca-shot memakai precision1 dan bloom baru', result.afterShot,
+    gap(0.0014 * 0.62 + 0.4 * 0.075 + 0.006 + 0.0028));
+  equal('Observasi spread tidak mengandalkan hit-rate atau kill', result.alive, true);
+});
+
+const ARMOR_MATRIX = [
+  { part: 'head', armor: 100, helmet: false, damage: 100, left: 100 },
+  { part: 'head', armor: 100, helmet: true, damage: 72, left: 100 },
+  { part: 'head', armor: 0, helmet: true, damage: 72, left: 0 },
+  { part: 'body', armor: 100, helmet: false, damage: 50, left: 55 },
+  { part: 'body', armor: 100, helmet: true, damage: 50, left: 55 },
+  { part: 'body', armor: 1, helmet: true, damage: 100 - 1 / 0.9, left: 0 },
+  { part: 'body', armor: 0, helmet: true, damage: 100, left: 0 },
+  { part: 'body', armor: -5, helmet: false, damage: 100, left: 0 },
+];
+
+test('Armor helper dan damage player/bot memiliki parity head/body', async (page) => {
+  const result = await page.evaluate((matrix) => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const bot = g.bots.roster.find((entity) => entity.team !== g.player.state.team);
+    const before = t.balances();
+    const state = (entity) => ({ health: entity.health, armor: entity.armor,
+      helmet: entity.helmet, alive: entity.alive, deaths: entity.deaths });
+    const rows = matrix.map((entry) => {
+      const entity = { armor: entry.armor, helmet: entry.helmet };
+      const damage = t.modules.combat.armorDamage(entity, 100, entry.part);
+      Object.assign(g.player.state, { health: 200, armor: entry.armor, helmet: entry.helmet, alive: true });
+      Object.assign(bot, { health: 200, armor: entry.armor, helmet: entry.helmet, alive: true });
+      const playerResult = g.player.damage(100, entry.part);
+      const botKilled = g.bots.damage(bot, 100, entry.part);
+      return { helper: { damage, armor: entity.armor, helmet: entity.helmet },
+        player: state(g.player.state), bot: state(bot), killed: playerResult.killed || botKilled };
+    });
+    return { rows, clean: { feed: g.match.state.feed.length, scores: { ...g.match.state.scores },
+      wallet: JSON.stringify(t.balances()) === JSON.stringify(before) } };
+  }, ARMOR_MATRIX);
+  equal('Seluruh baris matrix dieksekusi', result.rows.length, ARMOR_MATRIX.length);
+  result.rows.forEach((row, index) => {
+    const expected = ARMOR_MATRIX[index];
+    const label = `${expected.part}/armor${expected.armor}/helmet${expected.helmet}`;
+    equal(`armorDamage ${label} mengikuti durabilitas dan region`, Number.isFinite(row.helper.damage)
+      && Math.abs(row.helper.damage - expected.damage) < 1e-9 && Math.abs(row.helper.armor - expected.left) < 1e-9
+      && row.helper.helmet === expected.helmet, true, row.helper);
+    equal(`Damage aktual player/bot ${label} setara dan nonlethal`, !row.killed
+      && [row.player, row.bot].every((state) => Math.abs(state.health - (200 - expected.damage)) < 1e-9
+        && Math.abs(state.armor - expected.left) < 1e-9 && state.armor >= 0
+        && state.helmet === expected.helmet && state.alive && state.deaths === 0), true,
+    { player: row.player, bot: row.bot });
+  });
+  equal('Matrix nonlethal tidak membuat death/reward/score', result.clean,
+    { feed: 0, scores: { ember: 0, warden: 0 }, wallet: true });
+});
+
+test('Raycast Longbow nyata membedakan head, helmet, body, dan armor tipis', async (page) => {
+  const matrix = [
+    { part: 'head', armor: 100, helmet: false, damage: 34 * 3.55, left: 100 },
+    { part: 'head', armor: 100, helmet: true, damage: 34 * 3.55 * 0.72, left: 100 },
+    { part: 'head', armor: 0, helmet: true, damage: 34 * 3.55 * 0.72, left: 0 },
+    { part: 'body', armor: 100, helmet: false, damage: 17, left: 100 - 17 * 0.9 },
+    { part: 'body', armor: 1, helmet: true, damage: 34 - 1 / 0.9, left: 0 },
+    { part: 'body', armor: 0, helmet: true, damage: 34, left: 0 },
+  ];
+  const result = await page.evaluate((matrix) => window.tactics.withAPIs(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    const gun = t.prepareWeapons();
+    const target = g.bots.roster.find((bot) => bot.team !== g.player.state.team);
+    target.position.set(0.6, 0, 8.8);
+    g.player.state.position.set(0.6, 0, 14.8);
+    const calls = [];
+    const damage = g.bots.damage;
+    g.bots.damage = function (bot, amount, part) {
+      calls.push({ id: bot.id, amount, part });
+      return damage.call(this, bot, amount, part);
+    };
+    const rows = matrix.map((entry, index) => {
+      if (index) t.modules.weapon.stepGun(gun, 0.1);
+      Object.assign(target, { health: 200, armor: entry.armor, helmet: entry.helmet, alive: true });
+      const y = target.position.y + (entry.part === 'head' ? target.height - 0.16 : target.height * 0.5);
+      g.player.state.yaw = 0;
+      g.player.state.pitch = Math.atan2(y - (g.player.state.position.y + g.player.state.eye), 6);
+      g.shoot();
+      return { health: target.health, armor: target.armor, helmet: target.helmet,
+        alive: target.alive, deaths: target.deaths, mag: gun.mag, index: gun.shotIndex };
+    });
+    return { rows, calls, targetId: target.id, clear: !t.blocked(target.position.x, target.position.z, target)
+      && !t.blocked(g.player.state.position.x, g.player.state.position.z, g.player.state),
+      clean: { feed: g.match.state.feed.length, scores: { ...g.match.state.scores }, kills: g.player.state.kills } };
+  }), matrix);
+  equal('Kedua body raycast berada di luar collider', result.clear, true);
+  equal('Setiap shot mencapai target aktual satu kali', result.calls.map((call) => call.id), Array(matrix.length).fill(result.targetId));
+  result.rows.forEach((row, index) => {
+    const expected = matrix[index];
+    equal(`Raycast ${index + 1} mengenai region ${expected.part}`, result.calls[index]?.part, expected.part);
+    equal(`Armor raycast ${index + 1} sesuai damage aktual`, Math.abs(row.health - (200 - expected.damage)) < 1e-9
+      && Math.abs(row.armor - expected.left) < 1e-9 && row.helmet === expected.helmet
+      && row.alive && row.deaths === 0, true, row);
+  });
+  equal('Shoot aktual tetap menaikkan recoil index pada cadence0.1', result.rows.map((row) => row.index), [1, 2, 3, 4, 5, 6]);
+  equal('Ammo aktual berkurang satu per raycast', result.rows.map((row) => row.mag), [29, 28, 27, 26, 25, 24]);
+  equal('Raycast matrix nonlethal tidak membuat payout', result.clean,
+    { feed: 0, scores: { ember: 0, warden: 0 }, kills: 0 });
+});
+
+test('Death/down dan reward hanya sekali, corpse tidak bisa menerima damage', async (page) => {
+  const result = await page.evaluate(() => {
+    const g = window.testGame;
+    const t = window.tactics;
+    t.prepareEffects();
+    const [victim, killer] = g.bots.roster.filter((bot) => bot.team !== g.player.state.team);
+    Object.assign(victim, { health: 20, hasKit: true, primaryId: 'longbow' });
+    g.loadout.kit = true;
+    const state = () => ({
+      player: { health: g.player.state.health, alive: g.player.state.alive, kills: g.player.state.kills,
+        deaths: g.player.state.deaths, money: g.match.state.playerMoney, kit: g.loadout.kit },
+      victim: { health: victim.health, alive: victim.alive, deaths: victim.deaths, kit: victim.hasKit },
+      killer: { kills: killer.kills, money: killer.money }, feed: g.match.state.feed.length,
+    });
+    const startMoney = g.match.state.playerMoney;
+    const killerMoney = killer.money;
+    g.applyDamage(victim, 100, 'body', g.player.state, { name: 'LONGBOW' });
+    const botDeath = state();
+    const botCorpse = g.bots.damage(victim, 1000, 'head');
+    g.applyDamage(victim, 1000, 'head', g.player.state, { name: 'LONGBOW' });
+    const botRepeated = state();
+    g.player.state.health = 20;
+    g.applyDamage(g.player.state, 100, 'body', killer, { name: 'KESTREL-9' });
+    const playerDeath = state();
+    const playerCorpse = g.player.damage(1000, 'head');
+    g.applyDamage(g.player.state, 1000, 'head', killer, { name: 'KESTREL-9' });
+    return { startMoney, killerMoney, botDeath, botCorpse, botRepeated, playerDeath, playerCorpse,
+      playerRepeated: state(), bomb: t.bomb(), match: t.match() };
+  });
+  equal('Bot down menaikkan death, kill, dan reward tepat sekali', {
+    victim: result.botDeath.victim, kills: result.botDeath.player.kills,
+    money: result.botDeath.player.money, feed: result.botDeath.feed,
+  }, { victim: { health: 0, alive: false, deaths: 1, kit: true }, kills: 1, money: result.startMoney + 300, feed: 1 });
+  equal('bots.damage menolak corpse', result.botCorpse, false);
+  equal('applyDamage kedua tidak mengubah bot death/accounting', result.botRepeated, result.botDeath);
+  equal('Player down menaikkan death dan reward attacker sekali', {
+    player: result.playerDeath.player, killer: result.playerDeath.killer, feed: result.playerDeath.feed,
+  }, { player: { health: 0, alive: false, kills: 1, deaths: 1, money: result.startMoney + 300, kit: true },
+    killer: { kills: 1, money: result.killerMoney + 300 }, feed: 2 });
+  equal('player.damage menolak corpse tanpa death tambahan', result.playerCorpse, { killed: false, health: 0 });
+  equal('applyDamage kedua tidak mengubah player death/accounting', result.playerRepeated, result.playerDeath);
+  equal('Carrier mati menjatuhkan core tanpa eliminasi tim fixture', {
+    bomb: result.bomb.state, carrier: result.bomb.carrierId, phase: result.match.phase, scores: result.match.scores,
+  }, { bomb: 'dropped', carrier: null, phase: 'live', scores: { ember: 0, warden: 0 } });
+});
+
 async function main() {
   let server;
   let browser;
@@ -1750,6 +2356,7 @@ async function main() {
   try {
     const { chromium } = await import(PLAYWRIGHT_MODULE);
     const source = await readFile(new URL('../game/src/main.js', import.meta.url), 'utf8');
+    const mainResponse = instrumentMain(source);
     server = spawn('node', ['serve.ts', '--port', String(PORT)], {
       cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -1789,7 +2396,7 @@ async function main() {
           await route.abort('blockedbyclient');
         } else if (url.pathname === '/src/main.js') {
           mainInjections += 1;
-          await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: source + EXPOSE_MAIN });
+          await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: mainResponse });
         } else {
           await route.continue();
         }
@@ -1815,6 +2422,7 @@ async function main() {
           await page.evaluate((side) => {
             const g = window.testGame;
             window.tactics.restoreAPIs();
+            g.setShotMode('menu');
             g.input.state.keys.clear();
             g.input.state.firing = false;
             g.input.state.locked = false;

@@ -1,7 +1,8 @@
 # Harness taktik
 
 Harness browser untuk ekonomi bot, payout ronde, papan skor, anchor site,
-recovery core, plant/defuse fisik, granat, perception, serta integrasi tembak.
+recovery core, plant/defuse fisik, granat, perception, movement/recoil senjata,
+armor, serta integrasi tembak.
 
 ## Menjalankan
 
@@ -60,11 +61,12 @@ Output sementara milik tes dibersihkan setelah selesai.
   `match.state.now`, serta `attackerTeam` ke tim attacker saat ini.
   API/callback asli juga dipulihkan sebelum restart, sehingga override
   `effects`, audio, callback damage/noise, atau method tidak bocor antar-kasus.
+  Runner mengembalikan shim `shotMode` ke `'menu'` sebelum setiap kasus.
   Fixture pembelian berada di bawah harga Talon agar pilihan senjata acak
   tidak memengaruhi hasil.
 - Route `/src/main.js` membaca langsung `game/src/main.js` dan menambahkan
   `window.testGame` dalam respons browser. API yang diekspos:
-  `{map,bots,match,player,input,loadout,botCtx,matchCtx,hud,rowsForBoard,pickupBombIfDropped,updateObjective,simulationStep,restartMatch,buyItem,shoot,applyDamage,grenades,updateGrenades,effects,scene,throwGrenade}`.
+  `{map,bots,match,player,input,loadout,botCtx,matchCtx,hud,rowsForBoard,pickupBombIfDropped,updateObjective,simulationStep,restartMatch,buyItem,shoot,applyDamage,grenades,updateGrenades,effects,scene,throwGrenade,pistol,tickHud,switchSlot,setShotMode}`.
 - Semua request browser harus memiliki origin `http://localhost:8188`.
   Request eksternal diblokir dan menyebabkan kegagalan. `pageerror`, console
   error, request gagal, respons HTTP error, serta error routing/proses server
@@ -149,8 +151,8 @@ Metode deterministik:
 
 ## Step 3: granat, perception, dan tembakan aktual
 
-Ekspektasi eksekusi normal: **348 asersi baseline + 83 asersi baru = 431 asersi**,
-dalam **44 kasus**. Jumlah ini adalah harapan, bukan klaim kelulusan runtime.
+Baseline sampai step 3: **348 asersi sebelumnya + 83 asersi granat/perception =
+431 asersi**, dalam **44 kasus**.
 
 | Cakupan baru | Kasus | Asersi |
 | --- | ---: | ---: |
@@ -200,6 +202,72 @@ Fixture dan bukti:
   tidak menggunakan statistik hit-rate. Wrapper observasi selalu meneruskan
   panggilan ke implementasi asli dan dipulihkan dalam `finally`.
 
+## Step 4: movement/recoil, armor, dan cabang normal
+
+Ekspektasi eksekusi normal: **431 asersi baseline + 122 asersi baru = 553 asersi**,
+dalam **56 kasus**. Tambahan ini terdiri dari 12 kasus; hasil runtime tetap
+ditentukan saat harness dijalankan.
+
+| Cakupan baru | Kasus | Asersi |
+| --- | ---: | ---: |
+| Factory/refill seluruh gun: ammo, cooldown/reload, bloom/index, movement/rest | 1 | 8 |
+| Movement clamp/decay, speed default0, dan timer cooldown/reload | 1 | 7 |
+| First-shot precision, crouch, instantaneous speed, memory, dan bloom pada empat gun | 1 | 4 |
+| Cadence recoil pendek, pause/bloom guard, dan recovery Talon selama gap1.25 | 1 | 13 |
+| KeyW/stop/switch nyata; pistol dan primary pulih bersamaan, bot tetap default speed0 | 1 | 13 |
+| Input/equip/reload aktual, reload primary nonaktif, dan refill ronde | 1 | 12 |
+| Reserve parsial/habis, durasi reload, serta guard ammo negatif | 1 | 7 |
+| Auto input burst main mempertahankan index dan kick, lalu pulih sesudah pause | 1 | 7 |
+| Cabang normal memakai gunSpread aktual pada shoot dan crosshair HUD | 1 | 9 |
+| Matrix armor helper + player.damage/bots.damage, termasuk armor1 dan armor0 | 1 | 18 |
+| Raycast Longbow head/helmet/body dengan armor penuh/tipis, tanpa reset recoil per shot | 1 | 17 |
+| Death/down/reward sekali dan guard corpse; perilaku kit tetap sama | 1 | 7 |
+
+Kontrak numerik yang diuji:
+
+- Gun awal/refill memiliki `movement=0`, `restTime=1`. `stepGun` mempertahankan
+  maksimum speed clamp `speed/5.15` dan memory yang meluruh `dt*3.5`; timer
+  cooldown/reload tetap maju sebesar `dt`.
+- `gunFire` mengembalikan `restTime=0` serta menaikkan recoil index. Cadence
+  `<0.3` mempertahankan urutan pattern; `restTime>=0.3` **dan** bloom0 bersama
+  memulihkan index0. Talon tetap menolak shot selama gap1.25, lalu kembali ke
+  pattern pertama secara alami.
+- Spread memakai `max(movement, clamp(speed/5.15))`; stance crouch0.62 hanya
+  mengalikan komponen still. Precision index0 adalah `0.55+0.45*move`, kemudian
+  komponen move dan bloom ditambahkan.
+- KeyW/keyup dikirim ke handler input game dan dilangkahkan lewat
+  `simulationStep(1/60)`. Memory tidak hilang saat stop/switch. Kedua gun harus
+  menerima speed horizontal dan decay sekali per tick, termasuk gun nonaktif.
+  Recovery setelah stop dibandingkan dengan toleransi numerik karena velocity
+  physics meluruh secara bertahap.
+- Reload/equip memakai mousedown, KeyR, dan `switchSlot` nyata. Snapshot sesudah
+  firing frame menghitung bahwa `stepGun` sudah mengurangi cooldown/bloom serta
+  menaikkan restTime; snapshot ini tidak disamakan dengan nilai mentah gunFire.
+- Matrix damage memakai health200 agar nonlethal: head100 → 72 dengan helmet
+  tanpa mengurangi body armor; body100/armor100 menyerap50 dan menyisakan55
+  durability; armor1 hanya menyerap `1/0.9`, armor0 tidak menyerap. Player dan
+  bot harus memiliki hasil yang sama, armor tidak negatif.
+- Raycast near-range memakai Longbow34 dan head multiplier3.55. Helmet
+  mengalikan head damage0.72; body armor tidak melindungi head dan helmet tidak
+  melindungi body. Gun/raycast/applyDamage tetap aktual; tiap shot menaikkan
+  index pada cadence0.1. Toleransi floating point adalah `1e-9`.
+
+Shim mode normal:
+
+Route main hanya mengubah deklarasi `const shotMode` menjadi `let shotMode`
+**di respons HTTP dalam memori**, lalu menambahkan `setShotMode(value)` pada
+`window.testGame`. Sumber game di disk tetap dibaca langsung. Boot awal tetap
+`?shot=menu&seed=3`, sehingga loop RAF physics tidak berjalan otomatis; setter
+tidak membuat loop atau RNG baru.
+
+Kasus normal memanggil `setShotMode(null)`, `shoot`, dan `tickHud` aktual pada
+satu halaman yang sama. Getter movement meneruskan nilai/tulisan asli dan
+mencatat stack `gunSpread` dari `shoot`/`tickHud`; CSS crosshair juga dibandingkan
+dengan formula spread aktual. Descriptor dipulihkan dalam `finally`, mode
+dikembalikan ke `'menu'`, dan runner mengulang reset mode sebelum kasus lain.
+Pengujian ini tidak mengganti physics, spread, atau raycast dengan implementasi
+fixture dan tidak memakai statistik hit-rate.
+
 ## Menambah pengujian bot, granat, atau gunplay
 
 Tambahkan `test('Nama kasus', async (page) => { ... })` sebelum `main()`.
@@ -223,6 +291,11 @@ Di `page.evaluate`, gunakan `window.testGame` untuk API permainan dan
 - `prepareEffects()` / `perceptionPair(from,to,now)`: fixture entitas aktual
   health200/armor0 dan pasangan bot-player untuk pengujian perception tanpa
   tembakan bot lain; body pair divalidasi terhadap collider.
+- `prepareWeapons(id='longbow')`: membeli/equip primary melalui buyItem dan
+  memasang fixture live untuk tes kontrol senjata.
+- `gun(gun)`: snapshot ammo, cooldown/reload, bloom/index, movement/rest.
+- `observeMovement(gun)`: probe getter/setter movement untuk memeriksa jalur
+  gunSpread aktual; panggil `restore()` dalam `finally`.
 - `popGrenade(type,point)`: throw/pop nyata dengan snapshot stok dan disposal.
 - `observeCombat()`: wrapper pass-through untuk damage, audio shot, dan tracer;
   gunakan di dalam `withAPIs`.
@@ -243,7 +316,8 @@ Di `page.evaluate`, gunakan `window.testGame` untuk API permainan dan
 - `settleAnchors()`: perjalanan dari spawn sampai dua anchor benar-benar
   holding, disertai pemanasan yaw dan hasil trace.
 
-Gunakan `equal(label, aktual, harapan, buktiOpsional)` agar assertion baru ikut
-dihitung dan menghasilkan bukti `PASS`/`FAIL`. Callback `page.evaluate` harus
+Gunakan `equal(label, aktual, harapan, buktiOpsional)` atau
+`near(label, aktual, harapan, toleransi=1e-9)` agar assertion baru ikut dihitung
+dan menghasilkan bukti `PASS`/`FAIL`. Callback `page.evaluate` harus
 mandiri atau menerima argumen serializable; hindari sleep, fixture acak, dan
 harapan yang dihitung dari implementasi yang sedang diuji.

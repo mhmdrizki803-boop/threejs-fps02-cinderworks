@@ -48,12 +48,18 @@ cooldown: 0,
 reloadLeft: 0,
 shotIndex: 0,
 bloom: 0,
+movement: 0,
+restTime: 1,
 };
 return gun;
 }
-export function stepGun(gun, dt) {
+// Accuracy settles after movement; a pause restores first-shot precision and recoil.
+export function stepGun(gun, dt, speed = 0) {
 gun.cooldown = Math.max(0, gun.cooldown - dt);
 gun.bloom = Math.max(0, gun.bloom - dt * (gun.def.bloomMax > 0.03 ? 0.06 : 0.09));
+gun.movement = Math.max(Math.max(0, Math.min(1, speed / 5.15)), gun.movement - dt * 3.5);
+gun.restTime = Math.min(1, gun.restTime + dt);
+if (gun.restTime >= 0.3 && gun.bloom === 0) gun.shotIndex = 0;
 if (gun.reloadLeft > 0) {
 gun.reloadLeft = Math.max(0, gun.reloadLeft - dt);
 if (gun.reloadLeft === 0) {
@@ -78,6 +84,7 @@ export function gunFire(gun) {
 if (!gunReady(gun)) return false;
 gun.mag -= 1;
 gun.cooldown = gun.def.fireGap;
+gun.restTime = 0;
 gun.bloom = Math.min(gun.def.bloomMax, gun.bloom + gun.def.bloom);
 const pattern = gun.def.pattern;
 const kick = pattern[Math.min(gun.shotIndex, pattern.length - 1)];
@@ -86,9 +93,10 @@ return kick;
 }
 export function gunSpread(gun, speed, crouching) {
 const def = gun.def;
-const move = Math.min(1, speed / 5.15);
+const move = Math.max(gun.movement, Math.max(0, Math.min(1, speed / 5.15)));
 const stance = crouching ? 0.62 : 1;
-return (def.spreadStill * stance) + move * def.spreadMove + gun.bloom;
+const precision = gun.shotIndex === 0 ? 0.55 + 0.45 * move : 1;
+return def.spreadStill * stance * precision + move * def.spreadMove + gun.bloom;
 }
 export function gunRefill(gun) {
 gun.mag = gun.def.mag;
@@ -97,6 +105,8 @@ gun.cooldown = 0;
 gun.reloadLeft = 0;
 gun.bloom = 0;
 gun.shotIndex = 0;
+gun.movement = 0;
+gun.restTime = 1;
 }
 function boxMesh(w, h, d, color, metalness = 0.2, roughness = 0.65) {
 return new THREE.Mesh(
@@ -171,12 +181,6 @@ const bipod = boxMesh(0.012, 0.18, 0.012, steel, 0.8, 0.3);
 bipod.position.set(0, -0.1, -0.68);
 group.add(receiver, barrel, scope, lens, stock, bipod);
 }
-group.traverse((child) => {
-if (child.isMesh) {
-child.castShadow = false;
-child.receiveShadow = false;
-}
-});
 return group;
 }
 export function createViewModel(camera) {
@@ -243,5 +247,5 @@ state.flash = 0.055;
 state.kick = 0.055;
 }
 setActive('kestrel');
-return { state, setActive, setHidden, setMotion, update, fire, muzzle: new THREE.Vector3(0.25, -0.13, -0.95) };
+return { state, setActive, setHidden, setMotion, update, fire };
 }

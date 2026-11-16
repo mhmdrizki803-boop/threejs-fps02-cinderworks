@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildDossier } from '../vendor/makefun-threejs.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const temp = mkdtempSync('/tmp/opencode/fps-dossier-');
@@ -34,6 +35,12 @@ try {
   const doc = JSON.parse(bytes);
   const textBytes = Buffer.byteLength(doc.text);
   assert(textBytes <= 163840, `Dossier text melebihi cap: ${textBytes}`);
+  if (doc.text.includes('[Cut at')) {
+    // Diagnostic only: measure uncut source; the real output must still meet 163840 bytes.
+    const complete = JSON.parse(Buffer.from(buildDossier(outputs[0], { text_max_bytes: 1_000_000 })));
+    const required = Buffer.byteLength(complete.text);
+    console.error(JSON.stringify({ result: 'FAIL', requiredTextBytes: required, overCap: required - 163840, cut: true }));
+  }
   assert(!doc.text.includes('[Cut at'), 'Source terpotong di dossier');
   assert(bytes.length <= 1572864, 'Dossier JSON melebihi 1.5 MiB');
   const sources = files(join(root, 'game')).filter(path =>

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createMover } from './physics.js';
 import { createGun, stepGun, gunReady, gunFire, gunReload, WEAPONS } from './weapon.js';
-import { castShot, damageFor, spreadDirection } from './combat.js';
+import { castShot, damageFor, armorDamage, spreadDirection } from './combat.js';
 import { PALETTE, teamColor } from './palette.js';
 const ALLY_NAMES = ['PYRE', 'BRAND', 'COVE', 'ASH'];
 const ENEMY_NAMES = ['SLATE', 'MORROW', 'VALE', 'HARROW', 'SABLE'];
@@ -95,7 +95,6 @@ parts.legL = legL;
 parts.legR = legR;
 parts.armL = armL;
 parts.armR = armR;
-parts.gun = gun;
 parts.pack = pack;
 return { group, parts };
 }
@@ -255,13 +254,7 @@ return nearest;
 }
 function damage(bot, amount, part) {
 if (!bot.alive) return false;
-let damage = amount;
-if (part === 'head' && bot.helmet) damage *= 0.72;
-if (bot.armor > 0) {
-const absorbed = damage * 0.5;
-bot.armor = Math.max(0, bot.armor - absorbed * 0.9);
-damage -= absorbed;
-}
+const damage = armorDamage(bot, amount, part);
 bot.health = Math.max(0, bot.health - damage);
 if (bot.health === 0) {
 bot.alive = false;

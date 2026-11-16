@@ -89,7 +89,6 @@ let bombBeep = 0;
 let shake = 0;
 let boardTick = 0;
 let buyTick = 0;
-let grenadeId = 0;
 let grenadeSlot = null;
 const shotOrigin = new THREE.Vector3();
 const shotDir = new THREE.Vector3();
@@ -294,7 +293,7 @@ const dir = new THREE.Vector3(-Math.sin(s.yaw) * Math.cos(s.pitch), Math.sin(s.p
 const velocity = dir.multiplyScalar(def.speed);
 velocity.y += def.up;
 scene.add(mesh);
-grenades.push({ id: grenadeId += 1, type, mesh, velocity, fuse: def.fuse, owner: s });
+grenades.push({ type, mesh, velocity, fuse: def.fuse, owner: s });
 if (!shotMode) audio.beep(type === 'flash' ? 900 : 560);
 cancelGrenade();
 hud.setObjective(objectiveText());
@@ -738,7 +737,8 @@ view.setMotion(speed, player.state.onGround, player.state.crouching);
 } else {
 view.setMotion(0, true, false);
 }
-stepGun(activeGun, dt);
+stepGun(pistol, dt, speed);
+if (loadout.primary) stepGun(loadout.primary, dt, speed);
 view.update(dt, activeGun);
 if (phaseNow === 'live') {
 botCtx.now = match.state.now;
